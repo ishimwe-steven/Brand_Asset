@@ -1,18 +1,33 @@
 import { Navigate } from "react-router-dom";
-import useAuth from "../hooks/useAuth";
 
-const ProtectedRoute = ({ children }) => {
-  const { user, loading } = useAuth();
+export default function ProtectedRoute({
+  children,
+  allowedRoles,
+}) {
+  const token = localStorage.getItem("token");
 
-  if (loading) {
-    return <p>Loading...</p>;
-  }
+  const user = JSON.parse(
+    localStorage.getItem("user") || "null"
+  );
 
-  if (!user) {
+  if (!token || !user) {
     return <Navigate to="/login" replace />;
   }
 
-  return children;
-};
+  if (
+    user.role === "designer" &&
+    user.must_change_password &&
+    window.location.pathname !== "/dashboard/change-password"
+  ) {
+    return <Navigate to="/dashboard/change-password" replace />;
+  }
 
-export default ProtectedRoute;
+  if (
+    allowedRoles &&
+    !allowedRoles.includes(user.role)
+  ) {
+    return <Navigate to="/unauthorized" replace />;
+  }
+
+  return children;
+}

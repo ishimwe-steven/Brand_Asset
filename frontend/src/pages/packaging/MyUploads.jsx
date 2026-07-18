@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { getUploads, startVerification } from "../../services/upload.service";
+import { deleteUpload, getUploads, startVerification } from "../../services/upload.service";
 import { backendFileUrl } from "../../utils/helpers";
 
 const MyUploads = () => {
@@ -8,6 +8,14 @@ const MyUploads = () => {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   const [verifyingId, setVerifyingId] = useState(null);
+  const [deletingId, setDeletingId] = useState(null);
+  const [search, setSearch] = useState("");
+
+  const filteredUploads = useMemo(() => {
+    const term = search.trim().toLowerCase();
+    if (!term) return uploads;
+    return uploads.filter((upload) => [upload.product_name, upload.category_name, upload.market_name, upload.status].some((value) => String(value || "").toLowerCase().includes(term)));
+  }, [uploads, search]);
 
   const loadUploads = async () => {
     try {
@@ -36,6 +44,22 @@ const MyUploads = () => {
     }
   };
 
+  const handleDelete = async (upload) => {
+    const confirmed = window.confirm(`Delete the uploaded package "${upload.product_name || "Unnamed Product"}"? This action cannot be undone.`);
+    if (!confirmed) return;
+
+    try {
+      setDeletingId(upload.id);
+      setError("");
+      await deleteUpload(upload.id);
+      setUploads((current) => current.filter((item) => item.id !== upload.id));
+    } catch (err) {
+      setError(err.response?.data?.message || "Failed to delete uploaded package");
+    } finally {
+      setDeletingId(null);
+    }
+  };
+
   if (loading) return <p>Loading uploads...</p>;
 
   return (
@@ -47,12 +71,13 @@ const MyUploads = () => {
 
       {error && <div className="alert-error">{error}</div>}
 
-      <div className="section-card">
-        {uploads.length === 0 ? (
-          <p>No uploads found.</p>
+      <div className="section-card list-card-with-toolbar">
+        <div className="admin-table-toolbar"><div><h2>Packaging Uploads</h2><p>{filteredUploads.length} upload{filteredUploads.length === 1 ? "" : "s"}</p></div><label className="admin-search"><span>Search uploads</span><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Product, category or market" /></label></div>
+        {filteredUploads.length === 0 ? (
+          <div className="admin-empty-row">{search ? "No uploads match your search." : "No uploads found."}</div>
         ) : (
           <div className="upload-list">
-            {uploads.map((item) => (
+            {filteredUploads.map((item) => (
               <div className="upload-item" key={item.id}>
                 <div className="upload-thumb">
                   {item.file_type?.includes("image") ? (
@@ -88,6 +113,15 @@ const MyUploads = () => {
                     disabled={verifyingId === item.id}
                   >
                     {verifyingId === item.id ? "Verifying..." : "Verify Again"}
+                  </button>
+
+                  <button
+                    type="button"
+                    className="upload-delete-button"
+                    onClick={() => handleDelete(item)}
+                    disabled={deletingId === item.id || verifyingId === item.id}
+                  >
+                    {deletingId === item.id ? "Deleting..." : "Delete"}
                   </button>
                 </div>
               </div>

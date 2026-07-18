@@ -29,12 +29,16 @@ const Report = {
         pu.product_name,
         pu.file_path,
         u.name AS user_name,
+        COALESCE(member_company.company_name, owned_company.company_name, u.company_name) AS company_name,
         pc.name AS category_name,
         em.name AS market_name
       FROM reports rp
       JOIN verification_results vr ON rp.result_id = vr.id
       JOIN packaging_uploads pu ON vr.upload_id = pu.id
       JOIN users u ON pu.user_id = u.id
+      LEFT JOIN company_members cm ON cm.user_id = u.id AND cm.member_role = 'designer'
+      LEFT JOIN companies member_company ON member_company.id = cm.company_id
+      LEFT JOIN companies owned_company ON owned_company.owner_user_id = u.id
       JOIN product_categories pc ON pu.category_id = pc.id
       JOIN export_markets em ON pu.market_id = em.id
       ORDER BY rp.id DESC

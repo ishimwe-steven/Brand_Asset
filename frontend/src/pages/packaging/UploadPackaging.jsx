@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { getCategories } from "../../services/category.service";
 import { getMarkets } from "../../services/market.service";
+import { getMyBrands } from "../../services/brand.service";
 import { startVerification, uploadPackaging } from "../../services/upload.service";
 
 const UploadPackaging = () => {
@@ -9,9 +10,11 @@ const UploadPackaging = () => {
 
   const [categories, setCategories] = useState([]);
   const [markets, setMarkets] = useState([]);
+  const [brands, setBrands] = useState([]);
 
   const [form, setForm] = useState({
     product_name: "",
+    brand_id: "",
     category_id: "",
     market_id: "",
     packaging: null,
@@ -24,10 +27,12 @@ const UploadPackaging = () => {
   const loadData = async () => {
     try {
       const catRes = await getCategories();
-      const marketRes = await getMarkets();
+      const [marketRes, brandRes] = await Promise.all([getMarkets(), getMyBrands()]);
 
       setCategories(catRes.data || []);
       setMarkets(marketRes.data || []);
+      const brandData = brandRes?.data || brandRes || [];
+      setBrands(Array.isArray(brandData) ? brandData : brandData.brands || []);
     } catch {
       setError("Failed to load categories or markets");
     }
@@ -61,6 +66,11 @@ const UploadPackaging = () => {
     e.preventDefault();
     setError("");
 
+    if (!form.brand_id) {
+      setError("Brand is required");
+      return;
+    }
+
     if (!form.product_name || !form.category_id || !form.market_id || !form.packaging) {
       setError("All fields are required");
       return;
@@ -71,6 +81,7 @@ const UploadPackaging = () => {
 
       const data = new FormData();
       data.append("product_name", form.product_name);
+      data.append("brand_id", form.brand_id);
       data.append("category_id", form.category_id);
       data.append("market_id", form.market_id);
       data.append("packaging", form.packaging);
@@ -100,6 +111,16 @@ const UploadPackaging = () => {
 
       <div className="upload-grid">
         <form className="form-card" onSubmit={handleSubmit}>
+          <label>Brand</label>
+          <select name="brand_id" value={form.brand_id} onChange={handleChange} required>
+            <option value="">Select brand</option>
+            {brands.map((item) => (
+              <option key={item.id} value={item.id}>
+                {item.brand_name || item.name}
+              </option>
+            ))}
+          </select>
+
           <label>Product Name</label>
           <input
             type="text"

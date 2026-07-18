@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { downloadReportUrl, getReports } from "../../services/report.service";
 
@@ -6,6 +6,13 @@ const Reports = () => {
   const [reports, setReports] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [search, setSearch] = useState("");
+
+  const filteredReports = useMemo(() => {
+    const term = search.trim().toLowerCase();
+    if (!term) return reports;
+    return reports.filter((report) => [report.product_name, report.category_name, report.market_name, report.export_status, report.compliance_score].some((value) => String(value ?? "").toLowerCase().includes(term)));
+  }, [reports, search]);
 
   const loadReports = async () => {
     try {
@@ -51,9 +58,10 @@ const Reports = () => {
 
       {error && <div className="alert-error">{error}</div>}
 
-      <div className="section-card">
-        {reports.length === 0 ? (
-          <p>No reports generated yet.</p>
+      <div className="section-card admin-table-card">
+        <div className="admin-table-toolbar"><div><h2>Compliance Reports</h2><p>{filteredReports.length} report{filteredReports.length === 1 ? "" : "s"}</p></div><label className="admin-search"><span>Search reports</span><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Product, category or market" /></label></div>
+        {filteredReports.length === 0 ? (
+          <div className="admin-empty-row">{search ? "No reports match your search." : "No reports generated yet."}</div>
         ) : (
           <div className="table-wrap">
             <table>
@@ -70,7 +78,7 @@ const Reports = () => {
               </thead>
 
               <tbody>
-                {reports.map((report) => (
+                {filteredReports.map((report) => (
                   <tr key={report.id}>
                     <td>{report.product_name || "N/A"}</td>
                     <td>{report.category_name}</td>

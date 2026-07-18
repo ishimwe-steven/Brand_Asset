@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
 import { getVerification } from "../../services/verification.service";
 import { generateReport, downloadReportUrl } from "../../services/report.service";
+import { assetLabels, formatAssetResult, friendlyStatus } from "../../utils/assetFormatting";
 
 const VerificationResult = () => {
   const { id } = useParams();
@@ -99,18 +100,15 @@ const VerificationResult = () => {
               </tr>
             </thead>
             <tbody>
-              {result.detected_assets?.map((asset) => (
-                <tr key={asset.id}>
-                  <td>{asset.asset_type}</td>
-                  <td>{asset.detected_value || "N/A"}</td>
-                  <td>{asset.confidence || "0"}%</td>
-                  <td>
-                    <span className={`mini-badge ${asset.status}`}>
-                      {asset.status}
-                    </span>
-                  </td>
-                </tr>
-              ))}
+              {result.detected_assets?.map((asset) => {
+                const formatted = formatAssetResult(asset);
+                return <tr key={asset.id}>
+                  <td>{assetLabels[asset.asset_type] || asset.asset_type.replaceAll("_", " ")}</td>
+                  <td><strong>{formatted.result}</strong>{formatted.details && <div className="asset-details-text">{formatted.details}</div>}</td>
+                  <td>{asset.confidence != null ? `${Number(asset.confidence).toFixed(1)}%` : "—"}</td>
+                  <td><span className={`mini-badge ${asset.status}`}>{friendlyStatus(asset.status)}</span></td>
+                </tr>;
+              })}
             </tbody>
           </table>
         </div>

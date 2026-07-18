@@ -15,22 +15,66 @@ const Login = () => {
   const [loading, setLoading] = useState(false);
 
   const handleChange = (e) => {
-    setForm({
-      ...form,
+    setForm((prev) => ({
+      ...prev,
       [e.target.name]: e.target.value,
-    });
+    }));
   };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+
     setError("");
     setLoading(true);
 
     try {
-      await login(form);
-      navigate("/dashboard");
+      // login() should return backend response.data.data
+      const result = await login(form);
+
+      const user = result.user;
+      const nextAction = result.next_action;
+
+      // ============================
+      // DESIGNER
+      // ============================
+      if (user.role === "designer") {
+        if (
+          nextAction === "change_password" ||
+          user.must_change_password
+        ) {
+          navigate("/dashboard/change-password", {
+            replace: true,
+          });
+          return;
+        }
+
+        navigate("/dashboard/designer", {
+          replace: true,
+        });
+        return;
+      }
+
+      // ============================
+      // ADMIN
+      // ============================
+      if (user.role === "admin") {
+        navigate("/admin/dashboard", {
+          replace: true,
+        });
+        return;
+      }
+
+      // ============================
+      // EXPORTER (SME)
+      // ============================
+      navigate("/dashboard", {
+        replace: true,
+      });
     } catch (err) {
-      setError(err.response?.data?.message || "Login failed");
+      setError(
+        err.response?.data?.message ||
+          "Login failed"
+      );
     } finally {
       setLoading(false);
     }
@@ -40,12 +84,20 @@ const Login = () => {
     <div className="auth-page">
       <div className="auth-card">
         <h1>Welcome Back</h1>
-        <p>Login to continue to VerifyAI</p>
 
-        {error && <div className="auth-error">{error}</div>}
+        <p>
+          Login to continue to VerifyAI
+        </p>
+
+        {error && (
+          <div className="auth-error">
+            {error}
+          </div>
+        )}
 
         <form onSubmit={handleSubmit}>
           <label>Email</label>
+
           <input
             type="email"
             name="email"
@@ -56,6 +108,7 @@ const Login = () => {
           />
 
           <label>Password</label>
+
           <input
             type="password"
             name="password"
@@ -65,13 +118,21 @@ const Login = () => {
             required
           />
 
-          <button type="submit" disabled={loading}>
-            {loading ? "Logging in..." : "Login"}
+          <button
+            type="submit"
+            disabled={loading}
+          >
+            {loading
+              ? "Logging in..."
+              : "Login"}
           </button>
         </form>
 
         <p className="auth-link">
-          Don't have an account? <Link to="/register">Create account</Link>
+          Don't have an account?{" "}
+          <Link to="/register">
+            Create account
+          </Link>
         </p>
       </div>
     </div>

@@ -1,0 +1,75 @@
+.admin-layout {
+  min-height: 100vh;
+  background: #f4f7fb;
+}
+
+.admin-main {
+  min-height: 100vh;
+  margin-left: 280px;
+  width: calc(100% - 280px);
+}
+
+.admin-header {
+  min-height: 92px;
+  padding: 20px 32px;
+  background: #ffffff;
+  border-bottom: 1px solid #dfe7f2;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  position: sticky;
+  top: 0;
+  z-index: 50;
+}
+
+.admin-header h2 {
+  margin: 0;
+  color: #102a56;
+  font-size: 25px;
+}
+
+.admin-header p {
+  margin: 5px 0 0;
+  color: #64748b;
+}
+
+.admin-logout-button {
+  border: none;
+  border-radius: 9px;
+  padding: 12px 22px;
+  background: #dc2626;
+  color: #ffffff;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.admin-logout-button:hover {
+  background: #b91c1c;
+}
+
+.admin-content {
+  padding: 34px;
+}
+
+@media (max-width: 900px) {
+  .admin-main {
+    margin-left: 230px;
+    width: calc(100% - 230px);
+  }
+}
+
+@media (max-width: 700px) {
+  .admin-main {
+    width: 100%;
+    margin-left: 0;
+  }
+
+  .admin-header {
+    padding: 16px 20px;
+  }
+
+  .admin-content {
+    padding: 20px;
+  }
+}

@@ -1,6 +1,63 @@
 import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { getUpload, startVerification } from "../../services/upload.service";
+import { assetLabels, formatAssetResult, friendlyStatus } from "../../utils/assetFormatting";
+
+/*const assetLabels = {
+  logo_detection: "Logo Detection",
+  logo_placement: "Logo Position",
+  brand_colour_consistency: "Brand Colour Consistency",
+  product_name: "Product Name",
+  qr_code: "QR Code",
+  barcode: "Barcode",
+  country_of_origin: "Country of Origin",
+  storage_instructions: "Storage Instructions",
+  batch_number: "Batch Number",
+  net_weight: "Net Weight",
+  expiry_date: "Expiry Date",
+  manufacturer_address: "Manufacturer Address",
+  ocr_text: "Extracted Text",
+};*/
+
+/*const parseAssetValue = (value) => {
+  if (!value || typeof value !== "string") return value;
+  try { return JSON.parse(value); } catch { return value; }
+};*/
+
+/*const friendlyStatus = (status) => ({
+  detected: "Detected",
+  passed: "Compliant",
+  warning: "Warning",
+  failed: "Not compliant",
+  missing: "Not found",
+}[status] || status || "Not found");*/
+
+/*const formatAssetResult = (asset) => {
+  const value = parseAssetValue(asset.detected_value);
+
+  if (!value || value === "N/A") return { result: "Not found", details: "—" };
+  if (typeof value !== "object") return { result: String(value), details: "" };
+
+  const status = value.status || asset.status;
+  const score = value.score ?? value.confidence ?? value.consistency_score;
+  let details = value.message || value.recommendation || "";
+
+  if (asset.asset_type === "logo_placement") {
+    const position = value.position || value.detected_position || value.placement;
+    if (position) details = `Position: ${String(position).replaceAll("_", " ")}${details ? `. ${details}` : ""}`;
+  }
+
+  if (asset.asset_type === "brand_colour_consistency") {
+    const colours = value.details?.detected_colours || value.detected_colours || [];
+    const palette = colours.map((colour) => colour.hex).filter(Boolean).join(", ");
+    if (palette) details = `Detected palette: ${palette}${details ? `. ${details}` : ""}`;
+  }
+
+  return {
+    result: `${friendlyStatus(status)}${score !== undefined && score !== null ? ` (${Number(score).toFixed(1)}%)` : ""}`,
+    details,
+  };
+};*/
 
 const UploadDetails = () => {
   const { id } = useParams();
@@ -99,18 +156,17 @@ const UploadDetails = () => {
               </thead>
 
               <tbody>
-                {upload.detected_assets.map((asset) => (
-                  <tr key={asset.id}>
-                    <td>{asset.asset_type}</td>
-                    <td>{asset.detected_value || "N/A"}</td>
-                    <td>{asset.confidence || "0"}%</td>
-                    <td>
-                      <span className={`mini-badge ${asset.status}`}>
-                        {asset.status}
-                      </span>
-                    </td>
-                  </tr>
-                ))}
+                {upload.detected_assets.map((asset) => {
+                  const formatted = formatAssetResult(asset);
+                  return (
+                    <tr key={asset.id}>
+                      <td>{assetLabels[asset.asset_type] || asset.asset_type.replaceAll("_", " ")}</td>
+                      <td><strong>{formatted.result}</strong>{formatted.details && <div className="asset-details-text">{formatted.details}</div>}</td>
+                      <td>{asset.confidence !== null && asset.confidence !== undefined ? `${Number(asset.confidence).toFixed(1)}%` : "—"}</td>
+                      <td><span className={`mini-badge ${asset.status}`}>{friendlyStatus(asset.status)}</span></td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>

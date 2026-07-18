@@ -1,9 +1,14 @@
 const express = require("express");
-const router = express.Router();
+const auth = require("../middleware/auth.middleware");
+const admin = require("../middleware/admin.middleware");
+const { getUsers, createUser, updateUser, changeUserStatus, resetUserPassword } = require("../controllers/user.controller");
 
-router.get("/", (req, res) => res.json({ message: "Get all users" }));
-router.get("/:id", (req, res) => res.json({ message: "Get user by ID" }));
-router.put("/:id", (req, res) => res.json({ message: "Update user" }));
-router.delete("/:id", (req, res) => res.json({ message: "Delete user" }));
+const router = express.Router();
+router.use(auth, admin);
+router.get("/", getUsers);
+router.post("/", createUser);
+router.put("/:id", updateUser);
+router.patch("/:id/status", changeUserStatus);
+router.post("/:id/reset-password", resetUserPassword);
 
 module.exports = router;

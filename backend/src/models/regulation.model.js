@@ -101,6 +101,30 @@ const Regulation = {
     );
     return rows;
   },
+
+  replaceForRegulationSet: async (regulationSet, requirements) => {
+    const connection = await db.getConnection();
+    try {
+      await connection.beginTransaction();
+      await connection.query("DELETE FROM regulations WHERE regulation_set_id = ?", [regulationSet.id]);
+      for (const item of requirements) {
+        await connection.query(
+          `INSERT INTO regulations
+           (regulation_set_id, market_id, category_id, section, rule_name, requirement, mandatory, recommendation)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          [regulationSet.id, regulationSet.market_id, regulationSet.category_id,
+           item.section || null, item.rule_name, item.requirement,
+           item.mandatory !== false, item.recommendation || null]
+        );
+      }
+      await connection.commit();
+    } catch (error) {
+      await connection.rollback();
+      throw error;
+    } finally {
+      connection.release();
+    }
+  },
 };
 
 module.exports = Regulation;

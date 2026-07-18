@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import AdminModal from "../../components/admin/AdminModal";
 import { getCategories } from "../../services/category.service";
 import { getMarkets } from "../../services/market.service";
 import {
@@ -11,6 +12,8 @@ const Regulations = () => {
   const [regulations, setRegulations] = useState([]);
   const [categories, setCategories] = useState([]);
   const [markets, setMarkets] = useState([]);
+  const [search, setSearch] = useState("");
+  const [showForm, setShowForm] = useState(false);
 
   const [form, setForm] = useState({
     market_id: "",
@@ -36,6 +39,12 @@ const Regulations = () => {
     load();
   }, []);
 
+  const filteredRegulations = useMemo(() => {
+    const term = search.trim().toLowerCase();
+    if (!term) return regulations;
+    return regulations.filter((item) => [item.rule_name, item.market_name, item.category_name, item.section, item.requirement].some((value) => String(value || "").toLowerCase().includes(term)));
+  }, [regulations, search]);
+
   const handleChange = (e) => {
     setForm({ ...form, [e.target.name]: e.target.value });
   };
@@ -57,8 +66,8 @@ const Regulations = () => {
       mandatory: "1",
       recommendation: "",
     });
-
-    load();
+    setShowForm(false);
+    await load();
   };
 
   return (
@@ -68,7 +77,7 @@ const Regulations = () => {
         <p>Manage regulatory knowledge base rules.</p>
       </div>
 
-      <form className="form-card admin-form" onSubmit={submit}>
+      {showForm && <AdminModal title="Add Compliance Rule" onClose={() => setShowForm(false)}><form className="form-card admin-form admin-modal-form" onSubmit={submit}>
         <select name="market_id" value={form.market_id} onChange={handleChange} required>
           <option value="">Select market</option>
           {markets.map((item) => (
@@ -116,10 +125,17 @@ const Regulations = () => {
           onChange={handleChange}
         />
 
-        <button>Add Regulation</button>
-      </form>
+        <div className="admin-modal-actions"><button type="button" className="admin-cancel-button" onClick={() => setShowForm(false)}>Cancel</button><button type="submit">Add Regulation</button></div>
+      </form></AdminModal>}
 
-      <div className="section-card">
+      <div className="section-card admin-table-card">
+        <div className="admin-table-toolbar">
+          <div><h2>Compliance Rules</h2><p>{filteredRegulations.length} rule{filteredRegulations.length === 1 ? "" : "s"}</p></div>
+          <div className="admin-toolbar-actions">
+            <label className="admin-search"><span>Search rules</span><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Rule, market or category" /></label>
+            <button className="admin-add-button" type="button" onClick={() => setShowForm(true)}>+ Add Rule</button>
+          </div>
+        </div>
         <div className="table-wrap">
           <table>
             <thead>
@@ -133,7 +149,7 @@ const Regulations = () => {
               </tr>
             </thead>
             <tbody>
-              {regulations.map((item) => (
+              {filteredRegulations.map((item) => (
                 <tr key={item.id}>
                   <td>{item.rule_name}</td>
                   <td>{item.market_name}</td>
@@ -153,6 +169,7 @@ const Regulations = () => {
             </tbody>
           </table>
         </div>
+        {filteredRegulations.length === 0 && <div className="admin-empty-row">No compliance rules match your search.</div>}
       </div>
     </div>
   );

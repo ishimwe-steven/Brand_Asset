@@ -27,3 +27,8 @@ export const startVerification = async (uploadId) => {
 
   return response.data;
 };
+
+export const deleteUpload = async (id) => {
+  const response = await api.delete(`/uploads/${id}`);
+  return response.data;
+};

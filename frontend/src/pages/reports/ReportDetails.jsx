@@ -1,9 +1,11 @@
 import { useEffect, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useLocation, useParams } from "react-router-dom";
 import { downloadReportUrl, getReport } from "../../services/report.service";
 
 const ReportDetails = () => {
   const { id } = useParams();
+  const location = useLocation();
+  const reportsPath = location.pathname.startsWith("/admin/") ? "/admin/reports" : "/dashboard/reports";
 
   const [report, setReport] = useState(null);
   const [error, setError] = useState("");
@@ -71,7 +73,7 @@ const ReportDetails = () => {
 
           <button onClick={downloadPdf}>Download PDF</button>
 
-          <Link to="/dashboard/reports" className="secondary-link">
+          <Link to={reportsPath} className="secondary-link">
             Back to reports
           </Link>
         </div>

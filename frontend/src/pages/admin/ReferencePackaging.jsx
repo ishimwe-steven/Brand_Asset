@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import AdminModal from "../../components/admin/AdminModal";
 import { getCategories } from "../../services/category.service";
 import { getMarkets } from "../../services/market.service";
 import {
@@ -12,6 +13,8 @@ const ReferencePackaging = () => {
   const [references, setReferences] = useState([]);
   const [categories, setCategories] = useState([]);
   const [markets, setMarkets] = useState([]);
+  const [search, setSearch] = useState("");
+  const [showForm, setShowForm] = useState(false);
 
   const [form, setForm] = useState({
     category_id: "",
@@ -34,6 +37,12 @@ const ReferencePackaging = () => {
   useEffect(() => {
     load();
   }, []);
+
+  const filteredReferences = useMemo(() => {
+    const term = search.trim().toLowerCase();
+    if (!term) return references;
+    return references.filter((item) => [item.title, item.description, item.category_name, item.market_name].some((value) => String(value || "").toLowerCase().includes(term)));
+  }, [references, search]);
 
   const handleChange = (e) => {
     setForm({ ...form, [e.target.name]: e.target.value });
@@ -62,8 +71,8 @@ const ReferencePackaging = () => {
       description: "",
       reference: null,
     });
-
-    load();
+    setShowForm(false);
+    await load();
   };
 
   return (
@@ -73,7 +82,7 @@ const ReferencePackaging = () => {
         <p>Upload approved sample packaging for designers to use as guidance.</p>
       </div>
 
-      <form className="form-card admin-form" onSubmit={submit}>
+      {showForm && <AdminModal title="Add Reference Packaging" onClose={() => setShowForm(false)}><form className="form-card admin-form admin-modal-form" onSubmit={submit}>
         <select name="category_id" value={form.category_id} onChange={handleChange} required>
           <option value="">Select category</option>
           {categories.map((item) => (
@@ -105,12 +114,13 @@ const ReferencePackaging = () => {
 
         <input type="file" accept="image/*,.pdf" onChange={handleFile} required />
 
-        <button>Add Reference Packaging</button>
-      </form>
+        <div className="admin-modal-actions"><button type="button" className="admin-cancel-button" onClick={() => setShowForm(false)}>Cancel</button><button type="submit">Add Reference Packaging</button></div>
+      </form></AdminModal>}
 
-      <div className="section-card">
+      <div className="section-card list-card-with-toolbar">
+        <div className="admin-table-toolbar"><div><h2>Approved References</h2><p>{filteredReferences.length} reference{filteredReferences.length === 1 ? "" : "s"}</p></div><div className="admin-toolbar-actions"><label className="admin-search"><span>Search references</span><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Title, category or market" /></label><button className="admin-add-button" type="button" onClick={() => setShowForm(true)}>+ Add Reference</button></div></div>
         <div className="reference-grid">
-          {references.map((item) => (
+          {filteredReferences.map((item) => (
             <div className="reference-card" key={item.id}>
               {item.file_path?.match(/\.(jpg|jpeg|png|webp)$/i) ? (
                 <img
@@ -135,6 +145,7 @@ const ReferencePackaging = () => {
             </div>
           ))}
         </div>
+        {filteredReferences.length === 0 && <div className="admin-empty-row">{search ? "No references match your search." : "No reference packaging uploaded yet."}</div>}
       </div>
     </div>
   );

@@ -2,41 +2,94 @@ const multer = require("multer");
 const path = require("path");
 const fs = require("fs");
 
-const uploadDir = path.join(__dirname, "../uploads");
+const packagingUploadDir = path.resolve(
+  __dirname,
+  "../../uploads"
+);
 
-if (!fs.existsSync(uploadDir)) {
-  fs.mkdirSync(uploadDir, { recursive: true });
-}
+const brandUploadDir = path.resolve(
+  __dirname,
+  "../../uploads/brands"
+);
 
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, uploadDir);
+fs.mkdirSync(packagingUploadDir, {
+  recursive: true,
+});
+
+fs.mkdirSync(brandUploadDir, {
+  recursive: true,
+});
+
+const allowedMimeTypes = [
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+];
+
+const imageFileFilter = (_req, file, cb) => {
+  if (!allowedMimeTypes.includes(file.mimetype)) {
+    const uploadError = new Error(
+      "Only JPG, JPEG, PNG and WEBP images are allowed."
+    );
+
+    uploadError.statusCode = 400;
+
+    return cb(uploadError, false);
+  }
+
+  return cb(null, true);
+};
+
+const createFilename = (file) => {
+  const extension = path
+    .extname(file.originalname)
+    .toLowerCase();
+
+  const originalBaseName = path
+    .basename(file.originalname, extension)
+    .replace(/[^a-zA-Z0-9_-]/g, "_");
+
+  return `${Date.now()}-${originalBaseName}${extension}`;
+};
+
+const packagingStorage = multer.diskStorage({
+  destination: (_req, _file, cb) => {
+    cb(null, packagingUploadDir);
   },
 
-  filename: (req, file, cb) => {
-    const uniqueName =
-      Date.now() + "-" + Math.round(Math.random() * 1e9) + path.extname(file.originalname);
-
-    cb(null, uniqueName);
+  filename: (_req, file, cb) => {
+    cb(null, createFilename(file));
   },
 });
 
-const fileFilter = (req, file, cb) => {
-  const allowedTypes = ["image/jpeg", "image/png", "image/jpg", "application/pdf"];
+const brandStorage = multer.diskStorage({
+  destination: (_req, _file, cb) => {
+    cb(null, brandUploadDir);
+  },
 
-  if (allowedTypes.includes(file.mimetype)) {
-    cb(null, true);
-  } else {
-    cb(new Error("Only JPG, PNG and PDF files are allowed"), false);
-  }
-};
+  filename: (_req, file, cb) => {
+    cb(null, createFilename(file));
+  },
+});
 
 const upload = multer({
-  storage,
-  fileFilter,
+  storage: packagingStorage,
+  fileFilter: imageFileFilter,
   limits: {
     fileSize: 10 * 1024 * 1024,
+    files: 1,
+  },
+});
+
+const uploadBrandLogo = multer({
+  storage: brandStorage,
+  fileFilter: imageFileFilter,
+  limits: {
+    fileSize: 10 * 1024 * 1024,
+    files: 1,
   },
 });
 
 module.exports = upload;
+module.exports.upload = upload;
+module.exports.uploadBrandLogo = uploadBrandLogo;

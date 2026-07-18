@@ -6,6 +6,8 @@ const normalizeText = (text = "") => {
 };
 
 const extractDate = (text) => {
+  const labelled = text.match(/(?:best\s*before|exp(?:iry|iration)?(?:\s*date)?)[^0-9]{0,100}(\d{4}[\/\-.]\d{1,2}[\/\-.]\d{1,2}|\d{1,2}[\/\-.]\d{1,2}[\/\-.]\d{2,4})/i);
+  if (labelled) return labelled[1];
   const patterns = [
     /\b\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{2,4}\b/g,
     /\b\d{4}[\/\-\.]\d{1,2}[\/\-\.]\d{1,2}\b/g,
@@ -26,18 +28,49 @@ const extractPhone = (text) => {
 };
 
 const extractNetWeight = (text) => {
-  const match = text.match(/\b\d+(\.\d+)?\s?(g|kg|ml|l|litre|liter)\b/i);
+  const labelIndex = text.search(/net\s*(?:weight|wt)/i);
+  if (labelIndex >= 0) {
+    const window = text.slice(labelIndex, labelIndex + 140);
+    const values = [...window.matchAll(/\b(\d+(?:\.\d+)?)\s?(g|kg|ml|l|oz|lb)\b/gi)];
+    if (values.length) {
+      const best = values.sort((a, b) => Number(b[1]) - Number(a[1]))[0];
+      return `${best[1]} ${best[2]}`;
+    }
+  }
+  const match = text.match(/\b\d+(\.\d+)?\s?(g|kg|ml|l|litre|liter|oz|lb)\b/i);
   return match ? match[0] : null;
 };
 
 const extractBatchNumber = (text) => {
-  const match = text.match(/\b(batch|lot|bch|bn)[:\s\-]*[a-z0-9\-\/]+\b/i);
-  return match ? match[0] : null;
+  const labelIndex = text.search(/\b(?:batch|lot)(?:\s*\/\s*(?:batch|lot))?/i);
+  if (labelIndex < 0) return null;
+  const window = text.slice(labelIndex, labelIndex + 140);
+  const candidates = window.match(/\b(?=[a-z0-9-]*\d)[a-z]{1,5}-\d{2,}(?:-\d+)*\b/gi);
+  return candidates?.[0] || null;
 };
 
 const extractBarcode = (text) => {
+  const candidates = text.match(/(?:\d[\s"'_-]*){12,14}/g) || [];
+  const hasValidCheckDigit = (digits) => {
+    if (![12, 13, 14].includes(digits.length)) return false;
+    const body = digits.slice(0, -1).split("").reverse();
+    const sum = body.reduce((total, digit, index) => total + Number(digit) * (index % 2 === 0 ? 3 : 1), 0);
+    return (10 - (sum % 10)) % 10 === Number(digits.at(-1));
+  };
+  const normalized = candidates.map((candidate) => candidate.replace(/\D/g, ""));
+  const valid = normalized.find(hasValidCheckDigit);
+  if (valid) return valid;
+  for (const digits of normalized) if (!digits.startsWith("250") && digits.length >= 12 && digits.length <= 14) return digits;
   const match = text.match(/\b\d{8,14}\b/);
   return match ? match[0] : null;
+};
+
+const containsLabel = (text, pattern) => pattern.test(text);
+
+const containsBrandName = (text, brandName) => {
+  const haystack = text.toLowerCase().replace(/[^a-z0-9]+/g, " ");
+  const words = String(brandName || "").toLowerCase().match(/[a-z0-9]+/g) || [];
+  return words.length > 0 && words.every((word) => haystack.includes(word));
 };
 
 const extractCountryOfOrigin = (text) => {
@@ -73,6 +106,9 @@ const normalizeOcrToAssets = (ocrText = "", upload = {}, aiResult = {}) => {
   const qrCode = aiResult.assets?.qr_code?.value || null;
   const country = extractCountryOfOrigin(text);
   const storage = extractStorageInstructions(text);
+  const ingredients = containsLabel(text, /\bingredients?\s*[:\-]/i) ? "Ingredient statement detected" : null;
+  const nutritionFacts = containsLabel(text, /\bnutrition\s+facts?\b/i) ? "Nutrition Facts panel detected" : null;
+  const brandName = containsBrandName(text, upload.brand_name) ? upload.brand_name : null;
 
   return [
     {
@@ -86,6 +122,24 @@ const normalizeOcrToAssets = (ocrText = "", upload = {}, aiResult = {}) => {
       detected_value: upload.product_name || null,
       confidence: upload.product_name ? 90 : 0,
       status: upload.product_name ? "detected" : "missing",
+    },
+    {
+      asset_type: "brand_name",
+      detected_value: brandName,
+      confidence: brandName ? 85 : 0,
+      status: brandName ? "detected" : "missing",
+    },
+    {
+      asset_type: "ingredients",
+      detected_value: ingredients,
+      confidence: ingredients ? 85 : 0,
+      status: ingredients ? "detected" : "missing",
+    },
+    {
+      asset_type: "nutrition_facts",
+      detected_value: nutritionFacts,
+      confidence: nutritionFacts ? 85 : 0,
+      status: nutritionFacts ? "detected" : "missing",
     },
     {
       asset_type: "manufacturer_address",

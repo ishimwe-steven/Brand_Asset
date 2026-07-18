@@ -5,21 +5,51 @@ const { success, error } = require("../utils/response");
 
 exports.uploadPackaging = async (req, res) => {
   try {
-    const { category_id, market_id, product_name } = req.body;
+    const {
+      brand_id,
+      category_id,
+      market_id,
+      product_name,
+    } = req.body;
 
     if (!req.file) {
-      return error(res, "Packaging file is required", 400);
+      return error(
+        res,
+        "Packaging file is required",
+        400
+      );
+    }
+
+    if (!brand_id) {
+      return error(
+        res,
+        "Brand is required",
+        400
+      );
     }
 
     if (!category_id || !market_id) {
-      return error(res, "Category and export market are required", 400);
+      return error(
+        res,
+        "Category and export market are required",
+        400
+      );
+    }
+
+    if (!product_name || !product_name.trim()) {
+      return error(
+        res,
+        "Product name is required",
+        400
+      );
     }
 
     const uploadId = await Upload.create({
       user_id: req.user.id,
+      brand_id,
       category_id,
       market_id,
-      product_name,
+      product_name: product_name.trim(),
       file_path: `/uploads/${req.file.filename}`,
       file_type: req.file.mimetype,
     });
@@ -29,12 +59,20 @@ exports.uploadPackaging = async (req, res) => {
       "Packaging uploaded successfully",
       {
         upload_id: uploadId,
+        brand_id: Number(brand_id),
         file: `/uploads/${req.file.filename}`,
       },
       201
     );
   } catch (err) {
-    return error(res, "Failed to upload packaging", 500, err.message);
+    console.error("UPLOAD PACKAGING ERROR:", err);
+
+    return error(
+      res,
+      "Failed to upload packaging",
+      500,
+      err.message
+    );
   }
 };
 
@@ -89,13 +127,22 @@ exports.deleteUpload = async (req, res) => {
       return error(res, "You are not allowed to delete this upload", 403);
     }
 
-    const filePath = path.join(__dirname, "..", upload.file_path);
+    const deletion = await Upload.delete(req.params.id);
+    const backendRoot = path.resolve(__dirname, "../..");
+    const storedFiles = [upload.file_path, ...(deletion.reportPaths || [])];
 
-    if (fs.existsSync(filePath)) {
-      fs.unlinkSync(filePath);
+    for (const storedPath of storedFiles) {
+      const relativePath = String(storedPath || "").replace(/^[/\\]+/, "");
+      const absolutePath = path.resolve(backendRoot, relativePath);
+
+      if (absolutePath.startsWith(`${backendRoot}${path.sep}`) && fs.existsSync(absolutePath)) {
+        try {
+          fs.unlinkSync(absolutePath);
+        } catch (fileError) {
+          console.warn("UPLOAD FILE CLEANUP WARNING:", fileError.message);
+        }
+      }
     }
-
-    await Upload.delete(req.params.id);
 
     return success(res, "Upload deleted successfully");
   } catch (err) {
