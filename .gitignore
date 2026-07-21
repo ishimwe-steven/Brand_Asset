@@ -28,6 +28,7 @@ venv/
 __pycache__/
 *.pyc
 node_modules/
+temp_uploads/
 
 # Local research proposal document
 Mupenzi-Research-Proposal_final.docx

@@ -1,0 +1,10 @@
+venv/
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+temp_uploads/
+test-images/
+.git/
+.gitignore
