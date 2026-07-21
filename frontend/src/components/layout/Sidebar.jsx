@@ -25,7 +25,7 @@ const Sidebar = () => {
 
   return (
     <aside className="sidebar">
-      <div className="sidebar-brand">Verify<span>AI</span></div>
+      <div className="sidebar-brand">Export packaging <span>Verifier</span></div>
       <p className="sidebar-role">
         {user?.role === "designer" ? "Designer workspace" : "SME Exporter workspace"}
       </p>

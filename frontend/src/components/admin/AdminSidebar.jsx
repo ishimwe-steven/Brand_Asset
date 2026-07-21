@@ -41,7 +41,7 @@ const AdminSidebar = () => {
   return (
     <aside className="admin-sidebar">
       <div className="admin-sidebar-logo">
-        Verify<span>AI</span>
+        Export packaging <span>Verifier</span>
       </div>
 
       <nav className="admin-sidebar-nav">

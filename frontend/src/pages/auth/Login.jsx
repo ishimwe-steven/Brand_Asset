@@ -86,7 +86,7 @@ const Login = () => {
         <h1>Welcome Back</h1>
 
         <p>
-          Login to continue to VerifyAI
+          Login to continue to Export packaging Verifier
         </p>
 
         {error && (
