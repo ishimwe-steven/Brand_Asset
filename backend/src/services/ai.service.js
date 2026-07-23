@@ -288,28 +288,32 @@ const callGradioEndpoint = async (
   fallbackMessage
 ) => {
   try {
-    const client =
-      await getGradioClient();
+    const client = await getGradioClient();
 
-    console.log(
-      `Calling Hugging Face endpoint: ${endpoint}`
+    console.log("--------------------------------");
+    console.log("HUGGING FACE ENDPOINT:", endpoint);
+    console.log("PAYLOAD LENGTH:", payload.length);
+
+    payload.forEach((item, index) => {
+      console.log(`PAYLOAD ITEM ${index}:`, item);
+      console.log(`PAYLOAD ITEM ${index} TYPE:`, {
+        constructor: item?.constructor?.name,
+        name: item?.name,
+        type: item?.type,
+        size: item?.size,
+        path: item?.path,
+        url: item?.url,
+        orig_name: item?.orig_name,
+      });
+    });
+
+    console.log("--------------------------------");
+
+    const response = await client.predict(
+      endpoint,
+      payload
     );
 
-    const response =
-      await client.predict(
-        endpoint,
-        payload
-      );
-
-    /*
-     * Gradio commonly returns:
-     *
-     * {
-     *   type: "data",
-     *   data: [result],
-     *   endpoint: ...
-     * }
-     */
     let result;
 
     if (
@@ -317,18 +321,13 @@ const callGradioEndpoint = async (
       response.data.length === 1
     ) {
       result = response.data[0];
-    } else if (
-      response?.data !== undefined
-    ) {
+    } else if (response?.data !== undefined) {
       result = response.data;
     } else {
       result = response;
     }
 
-    if (
-      result === undefined ||
-      result === null
-    ) {
+    if (result === undefined || result === null) {
       throw new Error(
         "Hugging Face AI returned an empty response"
       );
@@ -340,20 +339,17 @@ const callGradioEndpoint = async (
 
     return result;
   } catch (error) {
-    const message = getAiErrorMessage(
-      error,
-      fallbackMessage
-    );
+    const message =
+      error?.response?.data?.detail ||
+      error?.response?.data?.message ||
+      error?.message ||
+      fallbackMessage;
 
     console.error(
       `AI SERVICE ERROR [${endpoint}]:`,
       message
     );
 
-    /*
-     * Reconnect during the next request.
-     * This helps when the free Space sleeps or restarts.
-     */
     gradioClientPromise = null;
 
     throw new Error(message);
