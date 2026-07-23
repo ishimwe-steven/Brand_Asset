@@ -35,36 +35,42 @@ const resolveStoredFilePath = (storedPath) => {
     throw new Error("File path is missing");
   }
 
-  const normalizedPath = String(storedPath).replace(
-    /^[/\\]+/,
-    ""
+  const normalizedPath = String(storedPath)
+    .replace(/^[/\\]+/, "");
+
+  const possiblePaths = [
+    path.resolve(
+      __dirname,
+      "..",
+      "..",
+      normalizedPath
+    ),
+
+    path.resolve(
+      __dirname,
+      "..",
+      normalizedPath
+    ),
+
+    path.resolve(
+      process.cwd(),
+      normalizedPath
+    ),
+  ];
+
+  const existingPath = possiblePaths.find(
+    (candidatePath) =>
+      fs.existsSync(candidatePath)
   );
 
-  const currentUploadPath = path.resolve(
-    __dirname,
-    "..",
-    "..",
-    normalizedPath
-  );
-
-  if (fs.existsSync(currentUploadPath)) {
-    return currentUploadPath;
+  if (!existingPath) {
+    throw new Error(
+      `Uploaded file not found. Checked: ${possiblePaths.join(", ")}`
+    );
   }
 
-  // Compatibility for files created by the older multer setup.
-  const olderUploadPath = path.resolve(
-    __dirname,
-    "..",
-    normalizedPath
-  );
-
-  if (fs.existsSync(olderUploadPath)) {
-    return olderUploadPath;
-  }
-
-  return currentUploadPath;
+  return existingPath;
 };
-
 /**
  * Confirms that a file exists before sending it
  * to the Hugging Face AI service.
@@ -159,17 +165,16 @@ const createGradioFile = async (
     "@gradio/client"
   );
 
-  const fileBuffer = fs.readFileSync(filePath);
-  const mimeType = getMimeType(filePath);
-
-  const fileBlob = new Blob(
-    [fileBuffer],
+  console.log(
+    `${label} prepared for upload:`,
     {
-      type: mimeType,
+      path: filePath,
+      filename: path.basename(filePath),
+      extension: path.extname(filePath),
     }
   );
 
-  return handle_file(fileBlob);
+  return handle_file(filePath);
 };
 
 /**
