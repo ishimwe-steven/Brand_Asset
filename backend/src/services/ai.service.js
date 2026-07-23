@@ -1,6 +1,5 @@
 const fs = require("fs");
 const path = require("path");
-const { File } = require("node:buffer");
 
 require("dotenv").config();
 
@@ -230,15 +229,12 @@ const createGradioFile = async (
 ) => {
   ensureFileExists(filePath, label);
 
-  const { handle_file } = await import(
-    "@gradio/client"
-  );
+  const { handle_file } = await import("@gradio/client");
 
   const filename = path.basename(filePath);
-
-  const extension = path
-    .extname(filename)
-    .toLowerCase();
+  const extension = path.extname(filename).toLowerCase();
+  const mimeType = getMimeType(filePath);
+  const fileBuffer = fs.readFileSync(filePath);
 
   if (!extension) {
     throw new Error(
@@ -252,15 +248,14 @@ const createGradioFile = async (
     );
   }
 
-  const mimeType = getMimeType(filePath);
-  const fileBuffer = fs.readFileSync(filePath);
-
-  const namedFile = new File(
+  /*
+   * Gradio checks generic file_types=["image"]
+   * using the Blob MIME type.
+   */
+  const typedBlob = new Blob(
     [fileBuffer],
-    filename,
     {
       type: mimeType,
-      lastModified: Date.now(),
     }
   );
 
@@ -268,16 +263,15 @@ const createGradioFile = async (
     `${label} prepared for Hugging Face:`,
     {
       localPath: filePath,
-      filename: namedFile.name,
+      originalFilename: filename,
       extension,
-      mimeType: namedFile.type,
-      size: namedFile.size,
+      mimeType: typedBlob.type,
+      size: typedBlob.size,
     }
   );
 
-  return handle_file(namedFile);
+  return handle_file(typedBlob);
 };
-
 /**
  * Calls an API endpoint exposed by the
  * Hugging Face Gradio application.
