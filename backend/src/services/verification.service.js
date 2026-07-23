@@ -215,14 +215,24 @@ const saveBrandAssetResult = async ({
   confidence,
   status,
 }) => {
+  const allowedStatuses = [
+    "detected",
+    "missing",
+    "unclear",
+  ];
+
+  const safeStatus = allowedStatuses.includes(status)
+    ? status
+    : detected
+      ? "detected"
+      : "missing";
+
   await Upload.saveDetectedAsset({
     upload_id: uploadId,
     asset_type: assetType,
     detected_value: stringifyValue(result),
     confidence: normalizeConfidence(confidence),
-    status:
-      status ||
-      (detected ? "detected" : "missing"),
+    status: safeStatus,
   });
 };
 
@@ -485,8 +495,8 @@ const runBrandAssetVerification = async (upload, contentAnalysis = {}) => {
     status: placementPassed
       ? "detected"
       : placementWarning
-        ? "warning"
-        : "failed",
+        ? "unclear"
+        : "missing",
   });
 
   if (!placementPassed) {
@@ -546,8 +556,8 @@ const runBrandAssetVerification = async (upload, contentAnalysis = {}) => {
     status: colourPassed
       ? "detected"
       : colourWarning
-        ? "warning"
-        : "failed",
+        ? "unclear"
+        : "missing",
   });
 
   if (!colourPassed) {
