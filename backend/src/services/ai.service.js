@@ -1,16 +1,28 @@
-const axios = require("axios");
-const FormData = require("form-data");
 const fs = require("fs");
 const path = require("path");
 
 require("dotenv").config();
 
-const AI_SERVICE_URL =
-  process.env.AI_SERVICE_URL || "http://127.0.0.1:8000";
+/**
+ * Hugging Face Space configuration.
+ *
+ * Render Environment:
+ * HF_SPACE_ID=Stevo12/verifyai-ai-service
+ *
+ * HF_TOKEN is optional because the Space is currently public.
+ */
+const HF_SPACE_ID =
+  process.env.HF_SPACE_ID || "Stevo12/verifyai-ai-service";
 
-const AI_REQUEST_TIMEOUT = Number(
-  process.env.AI_REQUEST_TIMEOUT || 120000
-);
+const HF_TOKEN = String(
+  process.env.HF_TOKEN || ""
+).trim();
+
+/**
+ * Cache the Gradio client connection.
+ * This prevents reconnecting to Hugging Face for every request.
+ */
+let gradioClientPromise = null;
 
 /**
  * Converts a stored URL path such as:
@@ -23,7 +35,10 @@ const resolveStoredFilePath = (storedPath) => {
     throw new Error("File path is missing");
   }
 
-  const normalizedPath = String(storedPath).replace(/^[/\\]+/, "");
+  const normalizedPath = String(storedPath).replace(
+    /^[/\\]+/,
+    ""
+  );
 
   const currentUploadPath = path.resolve(
     __dirname,
@@ -37,110 +52,258 @@ const resolveStoredFilePath = (storedPath) => {
   }
 
   // Compatibility for files created by the older multer setup.
-  return path.resolve(__dirname, "..", normalizedPath);
+  const olderUploadPath = path.resolve(
+    __dirname,
+    "..",
+    normalizedPath
+  );
+
+  if (fs.existsSync(olderUploadPath)) {
+    return olderUploadPath;
+  }
+
+  return currentUploadPath;
 };
 
 /**
  * Confirms that a file exists before sending it
- * to the Python AI service.
+ * to the Hugging Face AI service.
  */
-const ensureFileExists = (filePath, label = "File") => {
+const ensureFileExists = (
+  filePath,
+  label = "File"
+) => {
   if (!filePath || !fs.existsSync(filePath)) {
-    throw new Error(`${label} not found: ${filePath || "missing path"}`);
+    throw new Error(
+      `${label} not found: ${filePath || "missing path"}`
+    );
   }
 };
 
 /**
- * Extracts a useful message from Axios/FastAPI errors.
+ * Returns a MIME type based on the file extension.
  */
-const getAiErrorMessage = (err, fallbackMessage) => {
-  return (
-    err.response?.data?.detail ||
-    err.response?.data?.message ||
-    err.message ||
-    fallbackMessage
-  );
+const getMimeType = (filePath) => {
+  const extension = path.extname(filePath).toLowerCase();
+
+  const mimeTypes = {
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".png": "image/png",
+    ".webp": "image/webp",
+    ".gif": "image/gif",
+    ".bmp": "image/bmp",
+    ".pdf": "application/pdf",
+    ".docx":
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  };
+
+  return mimeTypes[extension] || "application/octet-stream";
 };
 
 /**
- * Sends multipart/form-data to FastAPI.
+ * Opens and caches the connection to the Hugging Face
+ * Gradio Space.
  */
-const postMultipart = async (endpoint, form, fallbackMessage) => {
+const getGradioClient = async () => {
+  if (!gradioClientPromise) {
+    gradioClientPromise = import("@gradio/client")
+      .then(async ({ Client }) => {
+        const options = {};
+
+        if (HF_TOKEN) {
+          options.token = HF_TOKEN;
+        }
+
+        console.log(
+          `Connecting to Hugging Face Space: ${HF_SPACE_ID}`
+        );
+
+        const client = await Client.connect(
+          HF_SPACE_ID,
+          options
+        );
+
+        console.log(
+          `Connected to Hugging Face Space: ${HF_SPACE_ID}`
+        );
+
+        return client;
+      })
+      .catch((error) => {
+        gradioClientPromise = null;
+
+        console.error(
+          "Hugging Face connection failed:",
+          error?.message || error
+        );
+
+        throw error;
+      });
+  }
+
+  return gradioClientPromise;
+};
+
+/**
+ * Converts a local file into a format accepted by
+ * the Gradio JavaScript client.
+ */
+const createGradioFile = async (
+  filePath,
+  label = "File"
+) => {
+  ensureFileExists(filePath, label);
+
+  const { handle_file } = await import(
+    "@gradio/client"
+  );
+
+  const fileBuffer = fs.readFileSync(filePath);
+  const mimeType = getMimeType(filePath);
+
+  const fileBlob = new Blob(
+    [fileBuffer],
+    {
+      type: mimeType,
+    }
+  );
+
+  return handle_file(fileBlob);
+};
+
+/**
+ * Calls an API endpoint exposed by the Hugging Face
+ * Gradio application.
+ */
+const callGradioEndpoint = async (
+  endpoint,
+  payload,
+  fallbackMessage
+) => {
   try {
-    const response = await axios.post(
-      `${AI_SERVICE_URL}${endpoint}`,
-      form,
-      {
-        headers: form.getHeaders(),
-        timeout: AI_REQUEST_TIMEOUT,
-        maxContentLength: Infinity,
-        maxBodyLength: Infinity,
-      }
+    const client = await getGradioClient();
+
+    console.log(
+      `Calling Hugging Face endpoint: ${endpoint}`
     );
 
-    return response.data;
-  } catch (err) {
-    const message = getAiErrorMessage(err, fallbackMessage);
+    const response = await client.predict(
+      endpoint,
+      payload
+    );
 
-    console.error(`AI SERVICE ERROR [${endpoint}]:`, message);
+    /*
+     * Gradio normally returns:
+     * {
+     *   type: "data",
+     *   data: [result],
+     *   endpoint: ...
+     * }
+     */
+    let result;
+
+    if (
+      Array.isArray(response?.data) &&
+      response.data.length === 1
+    ) {
+      result = response.data[0];
+    } else if (response?.data !== undefined) {
+      result = response.data;
+    } else {
+      result = response;
+    }
+
+    if (
+      result === undefined ||
+      result === null
+    ) {
+      throw new Error(
+        "Hugging Face AI returned an empty response"
+      );
+    }
+
+    console.log(
+      `Hugging Face endpoint completed: ${endpoint}`
+    );
+
+    return result;
+  } catch (error) {
+    const message =
+      error?.response?.data?.detail ||
+      error?.response?.data?.message ||
+      error?.message ||
+      fallbackMessage;
+
+    console.error(
+      `AI SERVICE ERROR [${endpoint}]:`,
+      message
+    );
+
+    /*
+     * Reconnect on the next request in case the Space
+     * slept, restarted or disconnected.
+     */
+    gradioClientPromise = null;
 
     throw new Error(message);
   }
 };
 
 /**
- * OCR + barcode + QR analysis.
+ * OCR + QR analysis.
  *
- * FastAPI:
- * POST /analyze
- * field: file
+ * Hugging Face Gradio API:
+ * API name: /analyze
+ *
+ * Parameters:
+ * file_value
  */
 const analyzePackaging = async (upload) => {
-  const packagingPath = resolveStoredFilePath(upload.file_path);
+  if (!upload) {
+    throw new Error(
+      "Packaging upload information is missing"
+    );
+  }
 
-  ensureFileExists(packagingPath, "Packaging image");
-
-  const form = new FormData();
-
-  form.append(
-    "file",
-    fs.createReadStream(packagingPath)
+  const packagingPath = resolveStoredFilePath(
+    upload.file_path
   );
 
-  return postMultipart(
+  const packagingFile = await createGradioFile(
+    packagingPath,
+    "Packaging image"
+  );
+
+  return callGradioEndpoint(
     "/analyze",
-    form,
+    [packagingFile],
     "Packaging analysis failed"
   );
 };
 
 /**
- * Checks the quality of an image.
+ * Checks image/logo quality.
  *
- * FastAPI:
- * POST /verify-logo-quality
- * field: file
+ * Hugging Face Gradio API:
+ * API name: /verify_logo_quality
  *
- * This can be used with the logo region later,
- * but currently it accepts a complete image file.
+ * Parameters:
+ * file_value
  */
 const verifyLogoQuality = async (filePath) => {
   const absolutePath = path.isAbsolute(filePath)
     ? filePath
     : resolveStoredFilePath(filePath);
 
-  ensureFileExists(absolutePath, "Logo image");
-
-  const form = new FormData();
-
-  form.append(
-    "file",
-    fs.createReadStream(absolutePath)
+  const logoFile = await createGradioFile(
+    absolutePath,
+    "Logo image"
   );
 
-  return postMultipart(
-    "/verify-logo-quality",
-    form,
+  return callGradioEndpoint(
+    "/verify_logo_quality",
+    [logoFile],
     "Logo quality verification failed"
   );
 };
@@ -148,63 +311,66 @@ const verifyLogoQuality = async (filePath) => {
 /**
  * Detects the official logo inside packaging.
  *
- * FastAPI:
- * POST /detect-logo-bbox
+ * Hugging Face Gradio API:
+ * API name: /detect_logo_bbox
  *
- * fields:
- * packaging
- * reference_logo
+ * Parameters:
+ * packaging_value
+ * reference_logo_value
  * threshold
  */
 const detectLogoBBox = async (
   upload,
   options = {}
 ) => {
+  if (!upload) {
+    throw new Error(
+      "Packaging upload information is missing"
+    );
+  }
+
   const {
     threshold = 0.6,
   } = options;
 
-  const packagingPath = resolveStoredFilePath(upload.file_path);
+  const packagingPath = resolveStoredFilePath(
+    upload.file_path
+  );
+
   const officialLogoPath = resolveStoredFilePath(
     upload.official_logo_path
   );
 
-  ensureFileExists(packagingPath, "Packaging image");
-  ensureFileExists(officialLogoPath, "Official logo");
-
-  const form = new FormData();
-
-  form.append(
-    "packaging",
-    fs.createReadStream(packagingPath)
+  const packagingFile = await createGradioFile(
+    packagingPath,
+    "Packaging image"
   );
 
-  form.append(
-    "reference_logo",
-    fs.createReadStream(officialLogoPath)
+  const officialLogoFile = await createGradioFile(
+    officialLogoPath,
+    "Official logo"
   );
 
-  form.append(
-    "threshold",
-    String(threshold)
-  );
-
-  return postMultipart(
-    "/detect-logo-bbox",
-    form,
+  return callGradioEndpoint(
+    "/detect_logo_bbox",
+    [
+      packagingFile,
+      officialLogoFile,
+      Number(threshold),
+    ],
     "Automatic logo detection failed"
   );
 };
 
 /**
- * Detects the official logo and checks placement.
+ * Detects the official logo and verifies its placement.
  *
- * FastAPI:
- * POST /detect-and-verify-logo-placement
+ * Hugging Face Gradio API:
+ * API name: /detect_and_verify_logo_placement
  *
- * fields:
- * packaging
- * reference_logo
+ * Parameters:
+ * packaging_value
+ * reference_logo_value
  * threshold
  * preferred_positions
  */
@@ -212,92 +378,24 @@ const detectAndVerifyLogoPlacement = async (
   upload,
   options = {}
 ) => {
+  if (!upload) {
+    throw new Error(
+      "Packaging upload information is missing"
+    );
+  }
+
   const {
     threshold = 0.6,
     preferredPositions,
   } = options;
 
-  const packagingPath = resolveStoredFilePath(upload.file_path);
+  const packagingPath = resolveStoredFilePath(
+    upload.file_path
+  );
+
   const officialLogoPath = resolveStoredFilePath(
     upload.official_logo_path
   );
-
-  ensureFileExists(packagingPath, "Packaging image");
-  ensureFileExists(officialLogoPath, "Official logo");
-
-  let positions = preferredPositions;
-
-  if (!positions) {
-    positions = upload.preferred_logo_positions;
-  }
-
-  if (Array.isArray(positions)) {
-    positions = positions.join(",");
-  }
-
-  if (!positions || typeof positions !== "string") {
-    positions = "top_left,top_center";
-  }
-
-  const form = new FormData();
-
-  form.append(
-    "packaging",
-    fs.createReadStream(packagingPath)
-  );
-
-  form.append(
-    "reference_logo",
-    fs.createReadStream(officialLogoPath)
-  );
-
-  form.append(
-    "threshold",
-    String(threshold)
-  );
-
-  form.append(
-    "preferred_positions",
-    positions
-  );
-
-  return postMultipart(
-    "/detect-and-verify-logo-placement",
-    form,
-    "Logo placement verification failed"
-  );
-};
-
-/**
- * Checks placement using an already known bounding box.
- *
- * FastAPI:
- * POST /verify-logo-placement
- *
- * fields:
- * file
- * x
- * y
- * width
- * height
- * preferred_positions
- */
-const verifyLogoPlacement = async (
-  upload,
-  bbox,
-  options = {}
-) => {
-  if (!bbox) {
-    throw new Error("Logo bounding box is required");
-  }
-
-  const {
-    preferredPositions,
-  } = options;
-
-  const packagingPath = resolveStoredFilePath(upload.file_path);
-
-  ensureFileExists(packagingPath, "Packaging image");
 
   let positions =
     preferredPositions ||
@@ -308,40 +406,71 @@ const verifyLogoPlacement = async (
     positions = positions.join(",");
   }
 
-  const form = new FormData();
+  if (
+    !positions ||
+    typeof positions !== "string"
+  ) {
+    positions = "top_left,top_center";
+  }
 
-  form.append(
-    "file",
-    fs.createReadStream(packagingPath)
+  const packagingFile = await createGradioFile(
+    packagingPath,
+    "Packaging image"
   );
 
-  form.append("x", String(bbox.x));
-  form.append("y", String(bbox.y));
-  form.append("width", String(bbox.width));
-  form.append("height", String(bbox.height));
-
-  form.append(
-    "preferred_positions",
-    positions
+  const officialLogoFile = await createGradioFile(
+    officialLogoPath,
+    "Official logo"
   );
 
-  return postMultipart(
-    "/verify-logo-placement",
-    form,
+  return callGradioEndpoint(
+    "/detect_and_verify_logo_placement",
+    [
+      packagingFile,
+      officialLogoFile,
+      Number(threshold),
+      positions,
+    ],
     "Logo placement verification failed"
   );
 };
 
 /**
- * Automatically detects the logo and compares its colours
+ * Compatibility function.
+ *
+ * Hugging Face does not expose a separate endpoint called
+ * /verify_logo_placement.
+ *
+ * Therefore, this function uses:
+ * /detect_and_verify_logo_placement
+ */
+const verifyLogoPlacement = async (
+  upload,
+  bbox,
+  options = {}
+) => {
+  if (!bbox) {
+    throw new Error(
+      "Logo bounding box is required"
+    );
+  }
+
+  return detectAndVerifyLogoPlacement(
+    upload,
+    options
+  );
+};
+
+/**
+ * Detects the logo and compares its brand colours
  * with the official logo.
  *
- * FastAPI:
- * POST /detect-and-verify-brand-colours
+ * Hugging Face Gradio API:
+ * API name: /detect_and_verify_brand_colours
  *
- * fields:
- * packaging
- * official_logo
+ * Parameters:
+ * packaging_value
+ * official_logo_value
  * threshold
  * number_of_colors
  */
@@ -349,62 +478,55 @@ const detectAndVerifyBrandColours = async (
   upload,
   options = {}
 ) => {
+  if (!upload) {
+    throw new Error(
+      "Packaging upload information is missing"
+    );
+  }
+
   const {
     threshold = 0.6,
     numberOfColors = 4,
   } = options;
 
-  const packagingPath = resolveStoredFilePath(upload.file_path);
+  const packagingPath = resolveStoredFilePath(
+    upload.file_path
+  );
+
   const officialLogoPath = resolveStoredFilePath(
     upload.official_logo_path
   );
 
-  ensureFileExists(packagingPath, "Packaging image");
-  ensureFileExists(officialLogoPath, "Official logo");
-
-  const form = new FormData();
-
-  form.append(
-    "packaging",
-    fs.createReadStream(packagingPath)
+  const packagingFile = await createGradioFile(
+    packagingPath,
+    "Packaging image"
   );
 
-  form.append(
-    "official_logo",
-    fs.createReadStream(officialLogoPath)
+  const officialLogoFile = await createGradioFile(
+    officialLogoPath,
+    "Official logo"
   );
 
-  form.append(
-    "threshold",
-    String(threshold)
-  );
-
-  form.append(
-    "number_of_colors",
-    String(numberOfColors)
-  );
-
-  return postMultipart(
-    "/detect-and-verify-brand-colours",
-    form,
+  return callGradioEndpoint(
+    "/detect_and_verify_brand_colours",
+    [
+      packagingFile,
+      officialLogoFile,
+      Number(threshold),
+      Number(numberOfColors),
+    ],
     "Brand colour verification failed"
   );
 };
 
 /**
- * Compares colours using a known logo bounding box.
+ * Compatibility function.
  *
- * FastAPI:
- * POST /verify-brand-colour-consistency
+ * Hugging Face does not expose a separate endpoint called
+ * /verify_brand_colour_consistency.
  *
- * fields:
- * packaging
- * official_logo
- * x
- * y
- * width
- * height
- * number_of_colors
+ * Therefore, this function uses:
+ * /detect_and_verify_brand_colours
  */
 const verifyBrandColourConsistency = async (
   upload,
@@ -412,109 +534,142 @@ const verifyBrandColourConsistency = async (
   options = {}
 ) => {
   if (!bbox) {
-    throw new Error("Logo bounding box is required");
+    throw new Error(
+      "Logo bounding box is required"
+    );
   }
 
-  const {
-    numberOfColors = 4,
-  } = options;
-
-  const packagingPath = resolveStoredFilePath(upload.file_path);
-  const officialLogoPath = resolveStoredFilePath(
-    upload.official_logo_path
-  );
-
-  ensureFileExists(packagingPath, "Packaging image");
-  ensureFileExists(officialLogoPath, "Official logo");
-
-  const form = new FormData();
-
-  form.append(
-    "packaging",
-    fs.createReadStream(packagingPath)
-  );
-
-  form.append(
-    "official_logo",
-    fs.createReadStream(officialLogoPath)
-  );
-
-  form.append("x", String(bbox.x));
-  form.append("y", String(bbox.y));
-  form.append("width", String(bbox.width));
-  form.append("height", String(bbox.height));
-
-  form.append(
-    "number_of_colors",
-    String(numberOfColors)
-  );
-
-  return postMultipart(
-    "/verify-brand-colour-consistency",
-    form,
-    "Brand colour consistency verification failed"
+  return detectAndVerifyBrandColours(
+    upload,
+    options
   );
 };
 
 /**
- * Extracts the official brand profile once during brand creation.
+ * Extracts the official brand profile.
  *
- * FastAPI:
- * POST /extract-brand-profile
+ * Hugging Face Gradio API:
+ * API name: /extract_brand_profile
  *
- * fields: official_logo. Colour count and palette are AI-derived.
+ * Parameters:
+ * file_value
  */
 const extractBrandProfile = async (
-  officialLogoPath,
-  options = {}
+  officialLogoPath
 ) => {
-  const absoluteLogoPath = path.isAbsolute(officialLogoPath)
+  const absoluteLogoPath = path.isAbsolute(
+    officialLogoPath
+  )
     ? officialLogoPath
     : resolveStoredFilePath(officialLogoPath);
 
-  ensureFileExists(absoluteLogoPath, "Official logo");
+  const officialLogoFile =
+    await createGradioFile(
+      absoluteLogoPath,
+      "Official logo"
+    );
 
-  const form = new FormData();
-
-  form.append(
-    "official_logo",
-    fs.createReadStream(absoluteLogoPath)
-  );
-
-  return postMultipart(
-    "/extract-brand-profile",
-    form,
+  return callGradioEndpoint(
+    "/extract_brand_profile",
+    [officialLogoFile],
     "Brand profile extraction failed"
   );
 };
 
-const extractRegulationRequirements = async (documentPath) => {
-  const absolutePath = path.isAbsolute(documentPath) && fs.existsSync(documentPath)
-    ? documentPath
-    : resolveStoredFilePath(documentPath);
-  ensureFileExists(absolutePath, "Regulation document");
-  const form = new FormData();
-  form.append("document", fs.createReadStream(absolutePath), {
-    filename: path.basename(absolutePath),
-  });
-  return postMultipart(
-    "/extract-regulation-requirements",
-    form,
+/**
+ * Extracts requirements from PDF or DOCX regulations.
+ *
+ * Hugging Face Gradio API:
+ * API name: /extract_regulation_requirements
+ *
+ * Parameters:
+ * file_value
+ */
+const extractRegulationRequirements = async (
+  documentPath
+) => {
+  const absolutePath =
+    path.isAbsolute(documentPath) &&
+    fs.existsSync(documentPath)
+      ? documentPath
+      : resolveStoredFilePath(documentPath);
+
+  const documentFile = await createGradioFile(
+    absolutePath,
+    "Regulation document"
+  );
+
+  return callGradioEndpoint(
+    "/extract_regulation_requirements",
+    [documentFile],
     "Regulation requirement extraction failed"
   );
 };
 
-const verifyLogoIdentity = async (upload, bbox, textScore = 0) => {
-  const packagingPath = resolveStoredFilePath(upload.file_path);
-  const officialLogoPath = resolveStoredFilePath(upload.official_logo_path);
-  ensureFileExists(packagingPath, "Packaging image");
-  ensureFileExists(officialLogoPath, "Official logo");
-  const form = new FormData();
-  form.append("packaging", fs.createReadStream(packagingPath));
-  form.append("official_logo", fs.createReadStream(officialLogoPath));
-  for (const key of ["x", "y", "width", "height"]) form.append(key, String(bbox[key]));
-  form.append("text_score", String(textScore));
-  return postMultipart("/verify-logo-identity", form, "Multimodal logo verification failed");
+/**
+ * Verifies whether the detected logo matches
+ * the official logo.
+ *
+ * Hugging Face Gradio API:
+ * API name: /verify_logo_identity
+ *
+ * Parameters:
+ * packaging_value
+ * official_logo_value
+ * x
+ * y
+ * width
+ * height
+ * text_score
+ */
+const verifyLogoIdentity = async (
+  upload,
+  bbox,
+  textScore = 0
+) => {
+  if (!upload) {
+    throw new Error(
+      "Packaging upload information is missing"
+    );
+  }
+
+  if (!bbox) {
+    throw new Error(
+      "Logo bounding box is required"
+    );
+  }
+
+  const packagingPath = resolveStoredFilePath(
+    upload.file_path
+  );
+
+  const officialLogoPath = resolveStoredFilePath(
+    upload.official_logo_path
+  );
+
+  const packagingFile = await createGradioFile(
+    packagingPath,
+    "Packaging image"
+  );
+
+  const officialLogoFile = await createGradioFile(
+    officialLogoPath,
+    "Official logo"
+  );
+
+  return callGradioEndpoint(
+    "/verify_logo_identity",
+    [
+      packagingFile,
+      officialLogoFile,
+      Number(bbox.x),
+      Number(bbox.y),
+      Number(bbox.width),
+      Number(bbox.height),
+      Number(textScore),
+    ],
+    "Multimodal logo verification failed"
+  );
 };
 
 module.exports = {
