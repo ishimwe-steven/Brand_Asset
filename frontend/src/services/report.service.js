@@ -18,6 +18,22 @@ export const generateReport = async (resultId) => {
   return response.data;
 };
 
+/**
+ * Kept for backward compatibility with:
+ * - Reports.jsx
+ * - ReportDetails.jsx
+ * - SystemReports.jsx
+ */
+export const downloadReportUrl = (resultId) => {
+  return `${
+    import.meta.env.VITE_BACKEND_URL
+  }/api/reports/download/${resultId}`;
+};
+
+/**
+ * Authenticated PDF download.
+ * This should be used by VerificationResult.jsx.
+ */
 export const downloadReport = async (resultId) => {
   const response = await api.get(
     `/reports/download/${resultId}`,
@@ -30,11 +46,22 @@ export const downloadReport = async (resultId) => {
     response.headers?.["content-type"] || "";
 
   if (!contentType.includes("application/pdf")) {
-    const errorText = await response.data.text();
+    let errorMessage =
+      "The server did not return a valid PDF file.";
 
-    throw new Error(
-      errorText || "The server did not return a valid PDF file."
-    );
+    try {
+      const errorText = await response.data.text();
+      const parsedError = JSON.parse(errorText);
+
+      errorMessage =
+        parsedError?.message ||
+        parsedError?.details ||
+        errorMessage;
+    } catch {
+      // Keep the default error message.
+    }
+
+    throw new Error(errorMessage);
   }
 
   const pdfBlob = new Blob(
