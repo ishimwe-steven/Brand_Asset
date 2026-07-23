@@ -1,8 +1,20 @@
 import { useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
-import { getVerification } from "../../services/verification.service";
-import { generateReport, downloadReportUrl } from "../../services/report.service";
-import { assetLabels, formatAssetResult, friendlyStatus } from "../../utils/assetFormatting";
+
+import {
+  getVerification,
+} from "../../services/verification.service";
+
+import {
+  generateReport,
+  downloadReport,
+} from "../../services/report.service";
+
+import {
+  assetLabels,
+  formatAssetResult,
+  friendlyStatus,
+} from "../../utils/assetFormatting";
 
 const VerificationResult = () => {
   const { id } = useParams();
@@ -10,14 +22,30 @@ const VerificationResult = () => {
   const [result, setResult] = useState(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
-  const [reportLoading, setReportLoading] = useState(false);
+
+  const [reportLoading, setReportLoading] =
+    useState(false);
+
+  const [reportMessage, setReportMessage] =
+    useState("");
 
   const loadResult = async () => {
     try {
-      const res = await getVerification(id);
-      setResult(res.data);
+      setLoading(true);
+      setError("");
+
+      const response =
+        await getVerification(id);
+
+      setResult(
+        response?.data || null
+      );
     } catch (err) {
-      setError(err.response?.data?.message || "Failed to load verification result");
+      setError(
+        err?.response?.data?.message ||
+          err?.message ||
+          "Failed to load verification result"
+      );
     } finally {
       setLoading(false);
     }
@@ -30,101 +58,322 @@ const VerificationResult = () => {
   const handleGenerateReport = async () => {
     try {
       setReportLoading(true);
-      await generateReport(id);
+      setReportMessage("");
+      setError("");
 
-      const token = localStorage.getItem("token");
-      const url = downloadReportUrl(id);
+      /*
+       * First create or update the report record
+       * in the backend.
+       */
+      const generatedResponse =
+        await generateReport(id);
 
-      const response = await fetch(url, {
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
-      });
+      /*
+       * Different backend response structures are supported.
+       * If no result ID is returned, the current verification ID
+       * is used.
+       */
+      const reportResultId =
+        generatedResponse?.data?.result_id ||
+        generatedResponse?.data?.verification_id ||
+        generatedResponse?.result_id ||
+        generatedResponse?.verification_id ||
+        id;
 
-      const blob = await response.blob();
-      const fileUrl = window.URL.createObjectURL(blob);
+      /*
+       * Download through the Axios API instance.
+       * This preserves the JWT Authorization header and
+       * receives the PDF as a binary Blob.
+       */
+      await downloadReport(reportResultId);
 
-      const a = document.createElement("a");
-      a.href = fileUrl;
-      a.download = `compliance-report-${id}.pdf`;
-      a.click();
-    } catch {
-      alert("Failed to generate report");
+      setReportMessage(
+        "PDF report downloaded successfully."
+      );
+    } catch (err) {
+      console.error(
+        "PDF REPORT ERROR:",
+        err
+      );
+
+      let message =
+        err?.response?.data?.message ||
+        err?.response?.data?.details ||
+        err?.message ||
+        "Failed to generate or download report.";
+
+      /*
+       * When responseType is blob, an API error can also
+       * arrive as a Blob containing JSON.
+       */
+      const responseBlob =
+        err?.response?.data;
+
+      if (responseBlob instanceof Blob) {
+        try {
+          const errorText =
+            await responseBlob.text();
+
+          const parsedError =
+            JSON.parse(errorText);
+
+          message =
+            parsedError?.message ||
+            parsedError?.details ||
+            message;
+        } catch {
+          // Keep the original message.
+        }
+      }
+
+      setError(message);
     } finally {
       setReportLoading(false);
     }
   };
 
-  if (loading) return <p>Loading verification result...</p>;
-  if (error) return <div className="alert-error">{error}</div>;
-  if (!result) return <p>No result found.</p>;
+  if (loading) {
+    return (
+      <div className="page-container">
+        <p>Loading verification result...</p>
+      </div>
+    );
+  }
+
+  if (error && !result) {
+    return (
+      <div className="page-container">
+        <div className="alert-error">
+          {error}
+        </div>
+      </div>
+    );
+  }
+
+  if (!result) {
+    return (
+      <div className="page-container">
+        <p>No result found.</p>
+      </div>
+    );
+  }
+
+  const detectedAssets =
+    Array.isArray(result.detected_assets)
+      ? result.detected_assets
+      : [];
+
+  const issues =
+    Array.isArray(result.issues)
+      ? result.issues
+      : [];
+
+  const suggestions =
+    Array.isArray(result.suggestions)
+      ? result.suggestions
+      : [];
 
   return (
     <div className="page-container">
       <div className="page-header">
         <h1>Verification Result</h1>
-        <p>Compliance analysis for {result.product_name}</p>
+
+        <p>
+          Compliance analysis for{" "}
+          {result.product_name || "product"}
+        </p>
       </div>
+
+      {error && (
+        <div className="alert-error">
+          {error}
+        </div>
+      )}
+
+      {reportMessage && (
+        <div className="alert-success">
+          {reportMessage}
+        </div>
+      )}
 
       <div className="result-grid">
         <div className="score-card">
-          <h2>{result.compliance_score}%</h2>
+          <h2>
+            {Number(
+              result.compliance_score || 0
+            ).toFixed(2)}
+            %
+          </h2>
+
           <p>Compliance Score</p>
-          <span className={`status-badge ${result.export_status}`}>
-            {result.export_status}
+
+          <span
+            className={`status-badge ${
+              result.export_status || ""
+            }`}
+          >
+            {friendlyStatus(
+              result.export_status
+            )}
           </span>
         </div>
 
         <div className="summary-card">
           <h3>Summary</h3>
-          <p>{result.summary}</p>
-          <p><strong>Category:</strong> {result.category_name}</p>
-          <p><strong>Market:</strong> {result.market_name}</p>
 
-          <button onClick={handleGenerateReport} disabled={reportLoading}>
-            {reportLoading ? "Generating..." : "Generate & Download PDF"}
+          <p>
+            {result.summary ||
+              "No verification summary available."}
+          </p>
+
+          <p>
+            <strong>Category:</strong>{" "}
+            {result.category_name || "—"}
+          </p>
+
+          <p>
+            <strong>Market:</strong>{" "}
+            {result.market_name || "—"}
+          </p>
+
+          <button
+            type="button"
+            onClick={handleGenerateReport}
+            disabled={reportLoading}
+          >
+            {reportLoading
+              ? "Generating PDF..."
+              : "Generate & Download PDF"}
           </button>
         </div>
       </div>
 
       <div className="section-card">
         <h3>Detected Assets</h3>
-        <div className="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Asset</th>
-                <th>Value</th>
-                <th>Confidence</th>
-                <th>Status</th>
-              </tr>
-            </thead>
-            <tbody>
-              {result.detected_assets?.map((asset) => {
-                const formatted = formatAssetResult(asset);
-                return <tr key={asset.id}>
-                  <td>{assetLabels[asset.asset_type] || asset.asset_type.replaceAll("_", " ")}</td>
-                  <td><strong>{formatted.result}</strong>{formatted.details && <div className="asset-details-text">{formatted.details}</div>}</td>
-                  <td>{asset.confidence != null ? `${Number(asset.confidence).toFixed(1)}%` : "—"}</td>
-                  <td><span className={`mini-badge ${asset.status}`}>{friendlyStatus(asset.status)}</span></td>
-                </tr>;
-              })}
-            </tbody>
-          </table>
-        </div>
+
+        {detectedAssets.length === 0 ? (
+          <p>No detected assets found.</p>
+        ) : (
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Asset</th>
+                  <th>Value</th>
+                  <th>Confidence</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+
+              <tbody>
+                {detectedAssets.map(
+                  (asset, index) => {
+                    const formatted =
+                      formatAssetResult(asset);
+
+                    return (
+                      <tr
+                        key={
+                          asset.id ||
+                          `${asset.asset_type}-${index}`
+                        }
+                      >
+                        <td>
+                          {assetLabels[
+                            asset.asset_type
+                          ] ||
+                            String(
+                              asset.asset_type ||
+                                "Unknown asset"
+                            ).replaceAll(
+                              "_",
+                              " "
+                            )}
+                        </td>
+
+                        <td>
+                          <strong>
+                            {formatted.result ||
+                              "—"}
+                          </strong>
+
+                          {formatted.details && (
+                            <div className="asset-details-text">
+                              {
+                                formatted.details
+                              }
+                            </div>
+                          )}
+                        </td>
+
+                        <td>
+                          {asset.confidence !=
+                          null
+                            ? `${Number(
+                                asset.confidence
+                              ).toFixed(1)}%`
+                            : "—"}
+                        </td>
+
+                        <td>
+                          <span
+                            className={`mini-badge ${
+                              asset.status || ""
+                            }`}
+                          >
+                            {friendlyStatus(
+                              asset.status
+                            )}
+                          </span>
+                        </td>
+                      </tr>
+                    );
+                  }
+                )}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
 
       <div className="section-card">
         <h3>Compliance Issues</h3>
-        {result.issues?.length === 0 ? (
+
+        {issues.length === 0 ? (
           <p>No issues found.</p>
         ) : (
-          result.issues?.map((issue) => (
-            <div className="issue-box" key={issue.id}>
-              <h4>{issue.rule_name}</h4>
-              <p>{issue.issue_description}</p>
-              <p><strong>Recommendation:</strong> {issue.recommendation}</p>
-              <span className="severity">{issue.severity}</span>
+          issues.map((issue, index) => (
+            <div
+              className="issue-box"
+              key={
+                issue.id ||
+                `${issue.rule_name}-${index}`
+              }
+            >
+              <h4>
+                {issue.rule_name ||
+                  issue.issue_type ||
+                  "Compliance issue"}
+              </h4>
+
+              <p>
+                {issue.issue_description ||
+                  "No description available."}
+              </p>
+
+              <p>
+                <strong>
+                  Recommendation:
+                </strong>{" "}
+                {issue.recommendation ||
+                  "No recommendation available."}
+              </p>
+
+              {issue.severity && (
+                <span className="severity">
+                  {issue.severity}
+                </span>
+              )}
             </div>
           ))
         )}
@@ -132,17 +381,52 @@ const VerificationResult = () => {
 
       <div className="section-card">
         <h3>AI Correction Suggestions</h3>
-        {result.suggestions?.length === 0 ? (
+
+        {suggestions.length === 0 ? (
           <p>No suggestions available.</p>
         ) : (
-          result.suggestions?.map((item) => (
-            <div className="suggestion-box" key={item.id || item.asset_type}>
-              <h4>{item.asset_type}</h4>
-              <p><strong>Problem:</strong> {item.problem}</p>
-              <p><strong>Suggestion:</strong> {item.suggestion}</p>
-              <p><strong>Recommended Position:</strong> {item.recommended_position}</p>
-            </div>
-          ))
+          suggestions.map(
+            (item, index) => (
+              <div
+                className="suggestion-box"
+                key={
+                  item.id ||
+                  `${item.asset_type}-${index}`
+                }
+              >
+                <h4>
+                  {item.asset_type ||
+                    item.issue_type ||
+                    "Suggestion"}
+                </h4>
+
+                <p>
+                  <strong>Problem:</strong>{" "}
+                  {item.problem ||
+                    "No problem description available."}
+                </p>
+
+                <p>
+                  <strong>
+                    Suggestion:
+                  </strong>{" "}
+                  {item.suggestion ||
+                    "No suggestion available."}
+                </p>
+
+                {item.recommended_position && (
+                  <p>
+                    <strong>
+                      Recommended Position:
+                    </strong>{" "}
+                    {
+                      item.recommended_position
+                    }
+                  </p>
+                )}
+              </div>
+            )
+          )
         )}
       </div>
     </div>
