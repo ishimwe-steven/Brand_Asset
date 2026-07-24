@@ -1,24 +1,22 @@
 const fs = require("fs");
 const path = require("path");
-const axios = require("axios");
-const FormData = require("form-data");
 
 const Brand = require("../models/brand.model");
 const Company = require("../models/company.model");
 const Designer = require("../models/designer.model");
 
 const {
+  extractBrandProfile,
+} = require("../services/ai.service");
+
+const {
   success,
   error,
 } = require("../utils/response");
 
-const AI_SERVICE_URL =
-  process.env.AI_SERVICE_URL ||
-  "http://127.0.0.1:8000";
-
-// =========================
-// Helpers
-// =========================
+// =========================================================
+// HELPERS
+// =========================================================
 
 const normalizeJsonField = (
   value,
@@ -60,16 +58,83 @@ const deleteFileSafely = (filePath) => {
   }
 };
 
+/**
+ * Converts an uploaded absolute path such as:
+ *
+ * C:\project\backend\uploads\brands\logo.png
+ *
+ * or:
+ *
+ * /opt/render/project/src/backend/uploads/brands/logo.png
+ *
+ * into:
+ *
+ * uploads/brands/logo.png
+ */
 const normalizeUploadedPath = (filePath) => {
-  return String(filePath)
+  return String(filePath || "")
     .replace(/\\/g, "/")
     .replace(/^.*?uploads\//, "uploads/");
 };
 
-const getAuthenticatedUserId = (req) => {
-  const userId = Number(req.user?.id);
+/**
+ * Resolves a stored logo path into an existing
+ * absolute filesystem path.
+ */
+const resolveStoredLogoPath = (storedPath) => {
+  if (!storedPath) {
+    return null;
+  }
 
-  if (!userId || Number.isNaN(userId)) {
+  if (
+    path.isAbsolute(storedPath) &&
+    fs.existsSync(storedPath)
+  ) {
+    return storedPath;
+  }
+
+  const normalizedPath = String(storedPath)
+    .replace(/\\/g, "/")
+    .replace(/^\/+/, "");
+
+  const possiblePaths = [
+    path.resolve(
+      process.cwd(),
+      normalizedPath
+    ),
+
+    path.resolve(
+      __dirname,
+      "..",
+      "..",
+      normalizedPath
+    ),
+
+    path.resolve(
+      __dirname,
+      "..",
+      normalizedPath
+    ),
+  ];
+
+  return (
+    possiblePaths.find((candidatePath) =>
+      fs.existsSync(candidatePath)
+    ) || null
+  );
+};
+
+const getAuthenticatedUserId = (req) => {
+  const userId = Number(
+    req.user?.id ||
+    req.user?.user_id ||
+    req.user?.userId
+  );
+
+  if (
+    !userId ||
+    Number.isNaN(userId)
+  ) {
     return null;
   }
 
@@ -138,9 +203,207 @@ const ensureBrandBelongsToCompany = (
   };
 };
 
-// =========================
-// Create Brand
-// =========================
+/**
+ * Converts Hugging Face responses into the
+ * actual extracted brand profile.
+ *
+ * Supported responses:
+ *
+ * {
+ *   success: true,
+ *   data: {
+ *     dominant_colours: [...]
+ *   }
+ * }
+ *
+ * or:
+ *
+ * {
+ *   success: true,
+ *   data: {
+ *     success: true,
+ *     data: {...}
+ *   }
+ * }
+ */
+const unwrapBrandProfile = (
+  aiResponse
+) => {
+  if (!aiResponse) {
+    throw new Error(
+      "The AI service returned an empty response."
+    );
+  }
+
+  if (aiResponse.success === false) {
+    throw new Error(
+      aiResponse.message ||
+      "The AI service failed to extract the brand profile."
+    );
+  }
+
+  let profile =
+    aiResponse.data ??
+    aiResponse.profile ??
+    aiResponse;
+
+  if (
+    profile &&
+    typeof profile === "object" &&
+    profile.success === false
+  ) {
+    throw new Error(
+      profile.message ||
+      "The AI service failed to extract the brand profile."
+    );
+  }
+
+  if (
+    profile &&
+    typeof profile === "object" &&
+    profile.data &&
+    typeof profile.data === "object"
+  ) {
+    profile = profile.data;
+  }
+
+  if (
+    !profile ||
+    typeof profile !== "object"
+  ) {
+    throw new Error(
+      "The AI service returned an invalid brand profile."
+    );
+  }
+
+  return profile;
+};
+
+/**
+ * Sends a logo to the Hugging Face AI service
+ * and returns a clean brand profile.
+ */
+const extractOfficialLogoProfile = async (
+  logoPath
+) => {
+  if (
+    !logoPath ||
+    !fs.existsSync(logoPath)
+  ) {
+    throw new Error(
+      "Official logo was not found on the server."
+    );
+  }
+
+  console.log(
+    "Extracting brand profile from official logo:",
+    {
+      path: logoPath,
+      filename: path.basename(logoPath),
+      extension:
+        path.extname(logoPath).toLowerCase(),
+      size: fs.statSync(logoPath).size,
+    }
+  );
+
+  const aiResponse =
+    await extractBrandProfile(
+      logoPath
+    );
+
+  const profile =
+    unwrapBrandProfile(aiResponse);
+
+  console.log(
+    "Brand profile extracted successfully."
+  );
+
+  return profile;
+};
+
+/**
+ * Supports different names the AI may return
+ * for dominant colours.
+ */
+const getDominantColours = (
+  profile
+) => {
+  const colours =
+    profile.dominant_colours ??
+    profile.dominant_colors ??
+    profile.brand_colours ??
+    profile.brand_colors ??
+    profile.colours ??
+    profile.colors ??
+    [];
+
+  return Array.isArray(colours)
+    ? colours
+    : normalizeJsonField(colours, []);
+};
+
+const getPrimaryColour = (
+  profile,
+  dominantColours
+) => {
+  return (
+    profile.primary_colour ??
+    profile.primary_color ??
+    dominantColours?.[0]?.hex ??
+    dominantColours?.[0]?.colour ??
+    dominantColours?.[0]?.color ??
+    dominantColours?.[0] ??
+    null
+  );
+};
+
+const getSecondaryColour = (
+  profile,
+  dominantColours
+) => {
+  return (
+    profile.secondary_colour ??
+    profile.secondary_color ??
+    dominantColours?.[1]?.hex ??
+    dominantColours?.[1]?.colour ??
+    dominantColours?.[1]?.color ??
+    dominantColours?.[1] ??
+    null
+  );
+};
+
+const getLogoMetadata = (
+  profile
+) => {
+  return (
+    profile.logo_metadata ??
+    profile.metadata ??
+    {
+      width:
+        profile.width ??
+        profile.logo_width ??
+        null,
+
+      height:
+        profile.height ??
+        profile.logo_height ??
+        null,
+
+      quality_score:
+        profile.quality_score ??
+        profile.logo_quality_score ??
+        null,
+
+      aspect_ratio:
+        profile.aspect_ratio ??
+        null,
+    }
+  );
+};
+
+// =========================================================
+// CREATE BRAND
+// =========================================================
 
 exports.createBrand = async (
   req,
@@ -227,12 +490,19 @@ exports.createBrand = async (
       );
     }
 
+    uploadedLogoPath =
+      req.file.path;
+
     if (
       Number.isNaN(
         minimumLogoAreaPercent
       ) ||
       minimumLogoAreaPercent <= 0
     ) {
+      deleteFileSafely(
+        uploadedLogoPath
+      );
+
       return error(
         res,
         "Minimum logo area percent must be greater than zero",
@@ -247,15 +517,16 @@ exports.createBrand = async (
       maximumLogoAreaPercent <=
         minimumLogoAreaPercent
     ) {
+      deleteFileSafely(
+        uploadedLogoPath
+      );
+
       return error(
         res,
         "Maximum logo area percent must be greater than minimum logo area percent",
         400
       );
     }
-
-    uploadedLogoPath =
-      req.file.path;
 
     if (
       !fs.existsSync(
@@ -287,50 +558,18 @@ exports.createBrand = async (
       );
     }
 
-    const formData =
-      new FormData();
-
-    formData.append(
-      "official_logo",
-      fs.createReadStream(
-        uploadedLogoPath
-      ),
-      {
-        filename: path.basename(
-          uploadedLogoPath
-        ),
-      }
-    );
-
-    const aiResponse =
-      await axios.post(
-        `${AI_SERVICE_URL}/extract-brand-profile`,
-        formData,
-        {
-          headers:
-            formData.getHeaders(),
-          maxBodyLength: Infinity,
-          timeout: 120000,
-        }
-      );
-
+    /*
+     * Hugging Face brand-profile extraction.
+     */
     const brandProfile =
-      aiResponse.data?.data;
-
-    if (
-      !brandProfile?.success
-    ) {
-      deleteFileSafely(
+      await extractOfficialLogoProfile(
         uploadedLogoPath
       );
 
-      return error(
-        res,
-        "AI service failed to extract the brand profile",
-        400,
-        aiResponse.data
+    const dominantColours =
+      getDominantColours(
+        brandProfile
       );
-    }
 
     const normalizedLogoPath =
       normalizeUploadedPath(
@@ -340,34 +579,47 @@ exports.createBrand = async (
     const brandId =
       await Brand.create({
         company_id: companyId,
-        brand_name: brandName,
+
+        brand_name:
+          brandName,
+
         official_logo_path:
           normalizedLogoPath,
+
         dominant_colours:
-          brandProfile
-            .dominant_colours ||
-          [],
+          dominantColours,
+
         primary_colour:
-          brandProfile
-            .primary_colour ||
-          null,
+          getPrimaryColour(
+            brandProfile,
+            dominantColours
+          ),
+
         secondary_colour:
-          brandProfile
-            .secondary_colour ||
-          null,
+          getSecondaryColour(
+            brandProfile,
+            dominantColours
+          ),
+
         logo_metadata:
-          brandProfile
-            .logo_metadata ||
-          {},
+          getLogoMetadata(
+            brandProfile
+          ),
+
         slogan,
         trademark,
+
         preferred_logo_positions:
           preferredLogoPositions,
+
         minimum_logo_area_percent:
           minimumLogoAreaPercent,
+
         maximum_logo_area_percent:
           maximumLogoAreaPercent,
-        created_by: userId,
+
+        created_by:
+          userId,
       });
 
     const createdBrand =
@@ -379,7 +631,9 @@ exports.createBrand = async (
       res,
       "Brand created successfully",
       {
-        brand: createdBrand,
+        brand:
+          createdBrand,
+
         extracted_profile:
           brandProfile,
       },
@@ -388,38 +642,26 @@ exports.createBrand = async (
   } catch (err) {
     console.error(
       "CREATE BRAND ERROR:",
-      err.response?.data ||
-        err.message
+      err?.message || err
     );
 
     deleteFileSafely(
       uploadedLogoPath
     );
 
-    if (
-      err.code ===
-      "ECONNREFUSED"
-    ) {
-      return error(
-        res,
-        "AI service is not running on port 8000",
-        503
-      );
-    }
-
     return error(
       res,
       "Failed to create brand",
       500,
-      err.response?.data ||
-        err.message
+      err?.message ||
+      "Brand profile extraction failed."
     );
   }
 };
 
-// =========================
-// Get Logged-in SME Brands
-// =========================
+// =========================================================
+// GET LOGGED-IN SME BRANDS
+// =========================================================
 
 exports.getCompanyBrands = async (
   req,
@@ -473,9 +715,9 @@ exports.getCompanyBrands = async (
   }
 };
 
-// =========================
-// Get Brand by ID
-// =========================
+// =========================================================
+// GET BRAND BY ID
+// =========================================================
 
 exports.getBrandById = async (
   req,
@@ -558,9 +800,9 @@ exports.getBrandById = async (
   }
 };
 
-// =========================
-// Update Brand
-// =========================
+// =========================================================
+// UPDATE BRAND
+// =========================================================
 
 exports.updateBrand = async (
   req,
@@ -639,7 +881,7 @@ exports.updateBrand = async (
         undefined
           ? String(
               req.body.slogan ||
-                ""
+              ""
             ).trim() || null
           : existingBrand.slogan,
 
@@ -648,7 +890,7 @@ exports.updateBrand = async (
         undefined
           ? String(
               req.body.trademark ||
-                ""
+              ""
             ).trim() || null
           : existingBrand.trademark,
 
@@ -712,9 +954,7 @@ exports.updateBrand = async (
           .logo_metadata,
     };
 
-    if (
-      !updateData.brand_name
-    ) {
+    if (!updateData.brand_name) {
       return error(
         res,
         "Brand name cannot be empty",
@@ -781,51 +1021,18 @@ exports.updateBrand = async (
         );
       }
 
-      const formData =
-        new FormData();
-
-      formData.append(
-        "official_logo",
-        fs.createReadStream(
-          newLogoPath
-        ),
-        {
-          filename:
-            path.basename(
-              newLogoPath
-            ),
-        }
-      );
-
-      const aiResponse =
-        await axios.post(
-          `${AI_SERVICE_URL}/extract-brand-profile`,
-          formData,
-          {
-            headers:
-              formData.getHeaders(),
-            maxBodyLength:
-              Infinity,
-            timeout: 120000,
-          }
-        );
-
+      /*
+       * Hugging Face brand-profile extraction.
+       */
       const brandProfile =
-        aiResponse.data?.data;
-
-      if (
-        !brandProfile?.success
-      ) {
-        deleteFileSafely(
+        await extractOfficialLogoProfile(
           newLogoPath
         );
 
-        return error(
-          res,
-          "Failed to extract the new official logo profile",
-          400
+      const dominantColours =
+        getDominantColours(
+          brandProfile
         );
-      }
 
       updateData.official_logo_path =
         normalizeUploadedPath(
@@ -833,24 +1040,24 @@ exports.updateBrand = async (
         );
 
       updateData.dominant_colours =
-        brandProfile
-          .dominant_colours ||
-        [];
+        dominantColours;
 
       updateData.primary_colour =
-        brandProfile
-          .primary_colour ||
-        null;
+        getPrimaryColour(
+          brandProfile,
+          dominantColours
+        );
 
       updateData.secondary_colour =
-        brandProfile
-          .secondary_colour ||
-        null;
+        getSecondaryColour(
+          brandProfile,
+          dominantColours
+        );
 
       updateData.logo_metadata =
-        brandProfile
-          .logo_metadata ||
-        {};
+        getLogoMetadata(
+          brandProfile
+        );
     }
 
     await Brand.update(
@@ -858,6 +1065,10 @@ exports.updateBrand = async (
       updateData
     );
 
+    /*
+     * Remove the old logo only after the database
+     * update succeeds.
+     */
     if (
       req.file &&
       existingBrand
@@ -868,9 +1079,7 @@ exports.updateBrand = async (
           .official_logo_path
     ) {
       const oldLogoAbsolutePath =
-        path.resolve(
-          __dirname,
-          "..",
+        resolveStoredLogoPath(
           existingBrand
             .official_logo_path
         );
@@ -893,38 +1102,26 @@ exports.updateBrand = async (
   } catch (err) {
     console.error(
       "UPDATE BRAND ERROR:",
-      err.response?.data ||
-        err.message
+      err?.message || err
     );
 
     deleteFileSafely(
       newLogoPath
     );
 
-    if (
-      err.code ===
-      "ECONNREFUSED"
-    ) {
-      return error(
-        res,
-        "AI service is not running on port 8000",
-        503
-      );
-    }
-
     return error(
       res,
       "Failed to update brand",
       500,
-      err.response?.data ||
-        err.message
+      err?.message ||
+      "Brand profile extraction failed."
     );
   }
 };
 
-// =========================
-// Activate / Deactivate Brand
-// =========================
+// =========================================================
+// ACTIVATE / DEACTIVATE BRAND
+// =========================================================
 
 exports.changeBrandStatus = async (
   req,
@@ -1037,13 +1234,30 @@ exports.changeBrandStatus = async (
     );
   }
 };
-exports.getAvailableBrands = async (req, res) => {
-  try {
-    const userId = Number(req.user?.id);
-    const role = String(req.user?.role || "").trim();
-    let companyId = Number(req.user?.company_id);
 
-    if (!userId || Number.isNaN(userId)) {
+// =========================================================
+// GET BRANDS AVAILABLE TO EXPORTER OR DESIGNER
+// =========================================================
+
+exports.getAvailableBrands = async (
+  req,
+  res
+) => {
+  try {
+    const userId =
+      getAuthenticatedUserId(req);
+
+    const role = String(
+      req.user?.role || ""
+    )
+      .trim()
+      .toLowerCase();
+
+    let companyId = Number(
+      req.user?.company_id
+    );
+
+    if (!userId) {
       return error(
         res,
         "Authenticated user was not found",
@@ -1051,10 +1265,16 @@ exports.getAvailableBrands = async (req, res) => {
       );
     }
 
-    // Resolve designer membership from the database so an older or
-    // stale JWT cannot hide a valid SME-company relationship.
+    /*
+     * Resolve designer membership from the database,
+     * so a stale JWT cannot hide a valid company
+     * relationship.
+     */
     if (role === "designer") {
-      const designer = await Designer.getById(userId);
+      const designer =
+        await Designer.getById(
+          userId
+        );
 
       if (!designer?.company_id) {
         return error(
@@ -1064,14 +1284,25 @@ exports.getAvailableBrands = async (req, res) => {
         );
       }
 
-      if (designer.membership_status !== "active") {
-        return error(res, "Designer company membership is disabled", 403);
+      if (
+        designer.membership_status !==
+        "active"
+      ) {
+        return error(
+          res,
+          "Designer company membership is disabled",
+          403
+        );
       }
 
-      companyId = Number(designer.company_id);
+      companyId = Number(
+        designer.company_id
+      );
     } else {
-      // SME/exporter company ID iva muri companies table.
-      const company = await Company.getByOwnerUserId(userId);
+      const company =
+        await Company.getByOwnerUserId(
+          userId
+        );
 
       if (!company) {
         return error(
@@ -1081,14 +1312,30 @@ exports.getAvailableBrands = async (req, res) => {
         );
       }
 
-      companyId = company.id;
+      if (
+        company.status !== "active"
+      ) {
+        return error(
+          res,
+          "Your company account is inactive",
+          403
+        );
+      }
+
+      companyId =
+        company.id;
     }
 
-    const brands = await Brand.getByCompany(companyId);
+    const brands =
+      await Brand.getByCompany(
+        companyId
+      );
 
-    const activeBrands = brands.filter(
-      (brand) => brand.status === "active"
-    );
+    const activeBrands =
+      brands.filter(
+        (brand) =>
+          brand.status === "active"
+      );
 
     return success(
       res,
