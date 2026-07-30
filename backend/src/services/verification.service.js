@@ -11,6 +11,38 @@ const {
   verifyLogoIdentity,
 } = require("./ai.service");
 
+const findBrandCandidate = (analysis, brandName) => {
+  const words = String(brandName || "").toLowerCase().match(/[a-z0-9]+/g) || [];
+  const detections = (analysis?.detected_text || []).filter((item) => {
+    const text = String(item.text || "").toLowerCase().replace(/[^a-z0-9]+/g, " ");
+    return words.some((word) => text.includes(word));
+  });
+  const anchorWord = words[0];
+  const anchor = detections.find((item) => String(item.text).toLowerCase().includes(anchorWord));
+  if (!anchor) return null;
+  const anchorCenterX = (anchor.bbox[0][0] + anchor.bbox[2][0]) / 2;
+  const anchorY = anchor.bbox[0][1];
+  const group = detections.filter((item) => {
+    const centerX = (item.bbox[0][0] + item.bbox[2][0]) / 2;
+    return Math.abs(item.bbox[0][1] - anchorY) < 140 && Math.abs(centerX - anchorCenterX) < 190;
+  });
+  const matchedWords = words.filter((word) => group.some((item) => String(item.text).toLowerCase().includes(word)));
+  if (!matchedWords.length) return null;
+  const xs = group.flatMap((item) => item.bbox.map((point) => point[0]));
+  const ys = group.flatMap((item) => item.bbox.map((point) => point[1]));
+  const minX = Math.min(...xs), maxX = Math.max(...xs), minY = Math.min(...ys), maxY = Math.max(...ys);
+  const textWidth = maxX - minX, textHeight = Math.max(20, maxY - minY);
+  return {
+    bbox: {
+      x: Math.max(0, Math.round(minX - textWidth * 0.18)),
+      y: Math.max(0, Math.round(minY - textHeight * 1.8)),
+      width: Math.round(textWidth * 1.36),
+      height: Math.round(textHeight * 3.3),
+    },
+    textScore: Number(((matchedWords.length / words.length) * 100).toFixed(2)),
+  };
+};
+
 const {
   normalizeOcrToAssets,
 } = require("./normalizer.service");
@@ -20,458 +52,38 @@ const {
 } = require("./suggestion.service");
 
 /**
- * Safely converts a value to a number.
- */
-const toNumber = (
-  value,
-  fallback = null
-) => {
-  const numericValue = Number(value);
-
-  return Number.isFinite(numericValue)
-    ? numericValue
-    : fallback;
-};
-
-/**
- * Unwraps nested Gradio/Hugging Face responses.
- *
- * Supported structures:
- *
- * {
- *   data: {...}
- * }
- *
- * {
- *   data: {
- *     data: {...}
- *   }
- * }
- *
- * {
- *   success: true,
- *   data: {...}
- * }
- */
-const unwrapAiPayload = (response) => {
-  let payload = response;
-
-  for (
-    let index = 0;
-    index < 5;
-    index += 1
-  ) {
-    if (
-      payload &&
-      typeof payload === "object" &&
-      payload.data !== undefined &&
-      payload.data !== payload
-    ) {
-      payload = payload.data;
-      continue;
-    }
-
-    break;
-  }
-
-  return payload;
-};
-
-/**
- * Extracts a logo-detection result from
- * different AI response formats.
- */
-const extractLogoDetectionResult = (
-  response
-) => {
-  const payload =
-    unwrapAiPayload(response);
-
-  if (!payload) {
-    return null;
-  }
-
-  return (
-    payload.logo_detection ||
-    payload.detection ||
-    payload.detection_result ||
-    payload.result?.logo_detection ||
-    payload.result?.detection ||
-    payload
-  );
-};
-
-/**
- * Extracts a logo-placement result.
- *
- * Hugging Face can return:
- *
- * {
- *   logo_detection: {...},
- *   logo_placement: {...}
- * }
- */
-const extractPlacementResult = (
-  response
-) => {
-  const payload =
-    unwrapAiPayload(response);
-
-  if (!payload) {
-    return null;
-  }
-
-  return (
-    payload.logo_placement ||
-    payload.placement ||
-    payload.placement_result ||
-    payload.result?.logo_placement ||
-    payload.result?.placement ||
-    payload
-  );
-};
-
-/**
- * Extracts brand-colour verification result.
- */
-const extractColourResult = (
-  response
-) => {
-  const payload =
-    unwrapAiPayload(response);
-
-  if (!payload) {
-    return null;
-  }
-
-  return (
-    payload.brand_colour_consistency ||
-    payload.brand_color_consistency ||
-    payload.colour_consistency ||
-    payload.color_consistency ||
-    payload.colour_result ||
-    payload.color_result ||
-    payload.result
-      ?.brand_colour_consistency ||
-    payload.result
-      ?.brand_color_consistency ||
-    payload
-  );
-};
-
-/**
- * Extracts a useful score from different
- * AI response structures.
- */
-const extractResultScore = (
-  result
-) => {
-  if (!result) {
-    return null;
-  }
-
-  const possibleScores = [
-    result.score,
-    result.confidence,
-    result.overall_score,
-    result.placement_score,
-    result.consistency_score,
-    result.colour_score,
-    result.color_score,
-    result.similarity_score,
-    result.match_score,
-    result.percentage,
-  ];
-
-  for (const value of possibleScores) {
-    const numericValue =
-      toNumber(value);
-
-    if (numericValue !== null) {
-      /*
-       * Convert 0–1 scores into percentages.
-       */
-      if (
-        numericValue >= 0 &&
-        numericValue <= 1
-      ) {
-        return Number(
-          (
-            numericValue * 100
-          ).toFixed(2)
-        );
-      }
-
-      return Number(
-        numericValue.toFixed(2)
-      );
-    }
-  }
-
-  return null;
-};
-
-/**
- * Finds a possible logo region using
- * OCR-detected brand text.
- */
-const findBrandCandidate = (
-  analysis,
-  brandName
-) => {
-  const words =
-    String(brandName || "")
-      .toLowerCase()
-      .match(/[a-z0-9]+/g) || [];
-
-  if (words.length === 0) {
-    return null;
-  }
-
-  const detections = (
-    analysis?.detected_text || []
-  ).filter((item) => {
-    const text = String(
-      item?.text || ""
-    )
-      .toLowerCase()
-      .replace(
-        /[^a-z0-9]+/g,
-        " "
-      );
-
-    return words.some(
-      (word) =>
-        text.includes(word)
-    );
-  });
-
-  const anchorWord =
-    words[0];
-
-  const anchor =
-    detections.find((item) =>
-      String(item?.text || "")
-        .toLowerCase()
-        .includes(anchorWord)
-    );
-
-  if (
-    !anchor ||
-    !Array.isArray(anchor.bbox) ||
-    anchor.bbox.length < 3
-  ) {
-    return null;
-  }
-
-  const anchorCenterX =
-    (
-      anchor.bbox[0][0] +
-      anchor.bbox[2][0]
-    ) / 2;
-
-  const anchorY =
-    anchor.bbox[0][1];
-
-  const group =
-    detections.filter((item) => {
-      if (
-        !Array.isArray(item.bbox) ||
-        item.bbox.length < 3
-      ) {
-        return false;
-      }
-
-      const centerX =
-        (
-          item.bbox[0][0] +
-          item.bbox[2][0]
-        ) / 2;
-
-      return (
-        Math.abs(
-          item.bbox[0][1] -
-          anchorY
-        ) < 160 &&
-        Math.abs(
-          centerX -
-          anchorCenterX
-        ) < 220
-      );
-    });
-
-  const matchedWords =
-    words.filter((word) =>
-      group.some((item) =>
-        String(item?.text || "")
-          .toLowerCase()
-          .includes(word)
-      )
-    );
-
-  if (
-    matchedWords.length === 0
-  ) {
-    return null;
-  }
-
-  const xs =
-    group.flatMap((item) =>
-      item.bbox.map(
-        (point) => point[0]
-      )
-    );
-
-  const ys =
-    group.flatMap((item) =>
-      item.bbox.map(
-        (point) => point[1]
-      )
-    );
-
-  if (
-    xs.length === 0 ||
-    ys.length === 0
-  ) {
-    return null;
-  }
-
-  const minX =
-    Math.min(...xs);
-
-  const maxX =
-    Math.max(...xs);
-
-  const minY =
-    Math.min(...ys);
-
-  const maxY =
-    Math.max(...ys);
-
-  const textWidth =
-    Math.max(
-      30,
-      maxX - minX
-    );
-
-  const textHeight =
-    Math.max(
-      20,
-      maxY - minY
-    );
-
-  return {
-    bbox: {
-      x: Math.max(
-        0,
-        Math.round(
-          minX -
-          textWidth * 0.25
-        )
-      ),
-
-      y: Math.max(
-        0,
-        Math.round(
-          minY -
-          textHeight * 2
-        )
-      ),
-
-      width: Math.round(
-        textWidth * 1.5
-      ),
-
-      height: Math.round(
-        textHeight * 3.8
-      ),
-    },
-
-    textScore: Number(
-      (
-        (
-          matchedWords.length /
-          words.length
-        ) * 100
-      ).toFixed(2)
-    ),
-  };
-};
-
-/**
- * Converts regulation names into keys matching
- * detected asset types.
+ * Converts regulation names into keys matching detected asset types.
  *
  * Example:
  * "Expiry Date Required" => "expiry_date"
  */
-const normalizeRuleName = (
-  ruleName = ""
-) => {
+const normalizeRuleName = (ruleName = "") => {
   return String(ruleName)
     .toLowerCase()
-    .replace(
-      /required/g,
-      ""
-    )
-    .replace(
-      /must be included/g,
-      ""
-    )
-    .replace(
-      /must appear/g,
-      ""
-    )
-    .replace(
-      /must exist/g,
-      ""
-    )
-    .replace(
-      /must be present/g,
-      ""
-    )
-    .replace(
-      /must be shown/g,
-      ""
-    )
-    .replace(
-      /must be readable/g,
-      ""
-    )
-    .replace(
-      /[^a-z0-9]+/g,
-      "_"
-    )
-    .replace(
-      /^_+|_+$/g,
-      ""
-    )
+    .replace(/required/g, "")
+    .replace(/must be included/g, "")
+    .replace(/must appear/g, "")
+    .replace(/must exist/g, "")
+    .replace(/must be present/g, "")
+    .replace(/must be shown/g, "")
+    .replace(/must be readable/g, "")
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
     .trim();
 };
 
 /**
- * Converts database detected assets
- * into an object map.
+ * Converts database detected assets into an object map.
  */
-const convertAssetsToMap = (
-  assets = []
-) => {
+const convertAssetsToMap = (assets = []) => {
   const map = {};
 
   for (const asset of assets) {
     map[asset.asset_type] = {
-      detected:
-        asset.status ===
-        "detected",
-
-      value:
-        asset.detected_value,
-
-      confidence:
-        asset.confidence,
-
-      status:
-        asset.status,
+      detected: asset.status === "detected",
+      value: asset.detected_value,
+      confidence: asset.confidence,
+      status: asset.status,
     };
   }
 
@@ -479,43 +91,27 @@ const convertAssetsToMap = (
 };
 
 /**
- * Safely converts confidence values.
+ * Safely converts different confidence formats into a number.
  */
-const normalizeConfidence = (
-  value
-) => {
-  const numericValue =
-    Number(value);
+const normalizeConfidence = (value) => {
+  const numericValue = Number(value);
 
-  if (
-    !Number.isFinite(
-      numericValue
-    )
-  ) {
+  if (!Number.isFinite(numericValue)) {
     return null;
   }
 
-  return Number(
-    numericValue.toFixed(2)
-  );
+  return Number(numericValue.toFixed(2));
 };
 
 /**
- * Converts objects to database-safe JSON.
+ * Converts objects to a database-safe JSON string.
  */
-const stringifyValue = (
-  value
-) => {
-  if (
-    value === null ||
-    value === undefined
-  ) {
+const stringifyValue = (value) => {
+  if (value === null || value === undefined) {
     return null;
   }
 
-  if (
-    typeof value === "string"
-  ) {
+  if (typeof value === "string") {
     return value;
   }
 
@@ -528,275 +124,110 @@ const stringifyValue = (
 
 /**
  * Determines whether an AI result passed.
- *
- * It supports:
- * - passed: true
- * - detected: true
- * - compliant: true
- * - consistent: true
- * - status strings
- * - score thresholds
  */
-const checkPassed = (
-  result,
-  options = {}
-) => {
+const checkPassed = (result) => {
   if (!result) {
     return false;
   }
 
-  const {
-    minimumScore = 60,
-  } = options;
-
-  if (
-    typeof result.passed ===
-    "boolean"
-  ) {
+  if (typeof result.passed === "boolean") {
     return result.passed;
   }
 
-  if (
-    typeof result.detected ===
-    "boolean"
-  ) {
+  if (typeof result.detected === "boolean") {
     return result.detected;
   }
 
-  if (
-    typeof result.compliant ===
-    "boolean"
-  ) {
-    return result.compliant;
-  }
-
-  if (
-    typeof result.consistent ===
-    "boolean"
-  ) {
-    return result.consistent;
-  }
-
-  if (
-    typeof result.acceptable ===
-    "boolean"
-  ) {
-    return result.acceptable;
-  }
-
-  if (
-    typeof result.correct ===
-    "boolean"
-  ) {
-    return result.correct;
-  }
-
   const status = String(
-    result.status ||
-    result.result ||
-    result.verdict ||
-    ""
-  )
-    .trim()
-    .toLowerCase();
+    result.status || result.result || ""
+  ).toLowerCase();
 
-  if (
-    [
-      "passed",
-      "pass",
-      "detected",
-      "compliant",
-      "consistent",
-      "acceptable",
-      "good",
-      "correct",
-      "matched",
-      "match",
-      "valid",
-      "approved",
-    ].includes(status)
-  ) {
-    return true;
-  }
-
-  if (
-    [
-      "failed",
-      "fail",
-      "missing",
-      "inconsistent",
-      "incorrect",
-      "invalid",
-      "not_detected",
-      "not detected",
-      "not_matched",
-      "not matched",
-      "mismatch",
-    ].includes(status)
-  ) {
-    return false;
-  }
-
-  const score =
-    extractResultScore(result);
-
-  if (score !== null) {
-    return score >= minimumScore;
-  }
-
-  return false;
+  return [
+    "passed",
+    "pass",
+    "detected",
+    "compliant",
+    "consistent",
+    "acceptable",
+    "good",
+  ].includes(status);
 };
 
 /**
- * A warning result is usable,
- * but requires correction.
+ * A warning result is usable, but requires correction.
  */
-const checkWarning = (
-  result,
-  options = {}
-) => {
+const checkWarning = (result) => {
   if (!result) {
     return false;
   }
 
-  const {
-    minimumWarningScore = 35,
-    passingScore = 60,
-  } = options;
-
   const status = String(
-    result.status ||
-    result.result ||
-    result.verdict ||
-    ""
-  )
-    .trim()
-    .toLowerCase();
+    result.status || result.result || ""
+  ).toLowerCase();
 
-  if (
-    [
-      "warning",
-      "unclear",
-      "needs_correction",
-      "needs correction",
-      "partially_compliant",
-      "partially compliant",
-      "partial_match",
-      "partial match",
-      "moderate",
-    ].includes(status)
-  ) {
-    return true;
-  }
-
-  const score =
-    extractResultScore(result);
-
-  return (
-    score !== null &&
-    score >= minimumWarningScore &&
-    score < passingScore
-  );
+  return [
+    "warning",
+    "needs_correction",
+    "needs correction",
+    "partially_compliant",
+  ].includes(status);
 };
 
 /**
- * Reads preferred logo positions stored
- * as JSON, an array, or CSV.
+ * Reads preferred logo positions stored as JSON,
+ * an array, or a comma-separated string.
  */
-const parsePreferredPositions = (
-  value
-) => {
-  if (
-    Array.isArray(value) &&
-    value.length > 0
-  ) {
+const parsePreferredPositions = (value) => {
+  if (Array.isArray(value) && value.length > 0) {
     return value;
   }
 
-  if (
-    typeof value === "string" &&
-    value.trim()
-  ) {
+  if (typeof value === "string" && value.trim()) {
     try {
-      const parsed =
-        JSON.parse(value);
+      const parsed = JSON.parse(value);
 
-      if (
-        Array.isArray(parsed) &&
-        parsed.length > 0
-      ) {
+      if (Array.isArray(parsed) && parsed.length > 0) {
         return parsed;
       }
     } catch {
-      const positions =
-        value
-          .split(",")
-          .map(
-            (position) =>
-              position.trim()
-          )
-          .filter(Boolean);
+      const positions = value
+        .split(",")
+        .map((position) => position.trim())
+        .filter(Boolean);
 
-      if (
-        positions.length > 0
-      ) {
+      if (positions.length > 0) {
         return positions;
       }
     }
   }
 
-  return [
-    "top_left",
-    "top_center",
-  ];
+  return ["top_left", "top_center"];
 };
 
 /**
- * Saves one AI brand asset result.
+ * Saves one AI brand asset result in detected_assets.
  */
-const saveBrandAssetResult =
-  async ({
-    uploadId,
-    assetType,
-    result,
-    detected,
-    confidence,
-    status,
-  }) => {
-    const allowedStatuses = [
-      "detected",
-      "missing",
-      "unclear",
-    ];
-
-    const safeStatus =
-      allowedStatuses.includes(status)
-        ? status
-        : detected
-          ? "detected"
-          : "missing";
-
-    await Upload.saveDetectedAsset({
-      upload_id: uploadId,
-
-      asset_type:
-        assetType,
-
-      detected_value:
-        stringifyValue(result),
-
-      confidence:
-        normalizeConfidence(
-          confidence
-        ),
-
-      status:
-        safeStatus,
-    });
-  };
+const saveBrandAssetResult = async ({
+  uploadId,
+  assetType,
+  result,
+  detected,
+  confidence,
+  status,
+}) => {
+  await Upload.saveDetectedAsset({
+    upload_id: uploadId,
+    asset_type: assetType,
+    detected_value: stringifyValue(result),
+    confidence: normalizeConfidence(confidence),
+    status:
+      status ||
+      (detected ? "detected" : "missing"),
+  });
+};
 
 /**
- * Produces one standard brand check.
+ * Produces one standard brand check object.
  */
 const createBrandCheck = ({
   name,
@@ -806,8 +237,7 @@ const createBrandCheck = ({
   message,
   data = null,
 }) => {
-  let status =
-    "failed";
+  let status = "failed";
 
   if (passed) {
     status = "passed";
@@ -820,10 +250,7 @@ const createBrandCheck = ({
     passed,
     warning,
     status,
-
-    score:
-      normalizeConfidence(score),
-
+    score: normalizeConfidence(score),
     message,
     data,
   };
@@ -832,1190 +259,660 @@ const createBrandCheck = ({
 /**
  * Runs OCR, barcode and QR analysis.
  */
-const runContentAnalysis =
-  async (upload) => {
-    const aiResponse =
-      await analyzePackaging(
-        upload
-      );
+const runContentAnalysis = async (upload) => {
+  const aiResponse = await analyzePackaging(upload);
 
-    if (
-      !aiResponse ||
-      aiResponse.success !== true
-    ) {
-      throw new Error(
-        aiResponse?.message ||
-        "AI service failed to analyze the packaging."
-      );
-    }
+  if (!aiResponse || aiResponse.success !== true) {
+    throw new Error(
+      "AI service failed to analyze the packaging."
+    );
+  }
 
-    const normalizedAssets =
-      normalizeOcrToAssets(
-        aiResponse.ocr_text ||
-        "",
-        upload,
-        aiResponse
-      );
+  const normalizedAssets = normalizeOcrToAssets(
+    aiResponse.ocr_text || "",
+    upload,
+    aiResponse
+  );
 
-    for (
-      const asset of
-      normalizedAssets
-    ) {
-      await Upload.saveDetectedAsset({
-        upload_id:
-          upload.id,
+  for (const asset of normalizedAssets) {
+    await Upload.saveDetectedAsset({
+      upload_id: upload.id,
+      ...asset,
+    });
+  }
 
-        ...asset,
-      });
-    }
-
-    return {
-      aiResponse,
-      normalizedAssets,
-    };
+  return {
+    aiResponse,
+    normalizedAssets,
   };
+};
 
 /**
- * Runs:
- * - logo detection
- * - logo identity
- * - logo placement
- * - brand colour consistency
+ * Runs automatic logo detection, logo placement,
+ * and brand colour consistency verification.
  */
-const runBrandAssetVerification =
-  async (
-    upload,
-    contentAnalysis = {}
-  ) => {
-    const brandChecks = [];
-    const brandIssues = [];
+const runBrandAssetVerification = async (upload, contentAnalysis = {}) => {
+  const brandChecks = [];
+  const brandIssues = [];
 
-    const preferredPositions =
-      parsePreferredPositions(
-        upload
-          .preferred_logo_positions
-      );
+  const preferredPositions = parsePreferredPositions(
+    upload.preferred_logo_positions
+  );
 
-    if (
-      !upload.official_logo_path
-    ) {
-      const missingLogoCheck =
-        createBrandCheck({
-          name:
-            "official_logo_reference",
-
-          passed:
-            false,
-
-          message:
-            "The selected brand does not have an official logo reference.",
-        });
-
-      brandChecks.push(
-        missingLogoCheck
-      );
-
-      brandIssues.push({
-        issue_type:
-          "brand_reference_missing",
-
-        issue_description:
-          "The selected brand does not have an official logo reference.",
-
-        recommendation:
-          "The SME must upload an official brand logo before packaging verification.",
-
-        severity:
-          "high",
-      });
-
-      return {
-        brandChecks,
-        brandIssues,
-        logoDetection: null,
-        logoPlacement: null,
-        colourConsistency: null,
-      };
-    }
-
-    /*
-     * Use a more tolerant threshold because the logo
-     * displayed on packaging is normally smaller than
-     * the uploaded official logo.
-     */
-    const detectionResponse =
-      await detectLogoBBox(
-        upload,
-        {
-          threshold: 0.35,
-        }
-      );
-
-    console.log(
-      "LOGO DETECTION RAW RESPONSE:",
-      JSON.stringify(
-        detectionResponse
-      )
-    );
-
-    let logoDetection =
-      extractLogoDetectionResult(
-        detectionResponse
-      );
-
-    console.log(
-      "NORMALIZED LOGO DETECTION:",
-      JSON.stringify(
-        logoDetection
-      )
-    );
-
-    /*
-     * If standard visual matching fails,
-     * use OCR text to identify a possible logo region,
-     * then run multimodal logo identity verification.
-     */
-    if (
-      !logoDetection?.detected
-    ) {
-      const candidate =
-        findBrandCandidate(
-          contentAnalysis,
-          upload.brand_name
-        );
-
-      if (candidate) {
-        console.log(
-          "OCR BRAND CANDIDATE:",
-          JSON.stringify(
-            candidate
-          )
-        );
-
-        const identityResponse =
-          await verifyLogoIdentity(
-            upload,
-            candidate.bbox,
-            candidate.textScore
-          );
-
-        console.log(
-          "LOGO IDENTITY RAW RESPONSE:",
-          JSON.stringify(
-            identityResponse
-          )
-        );
-
-        const identityResult =
-          extractLogoDetectionResult(
-            identityResponse
-          );
-
-        if (identityResult) {
-          logoDetection =
-            identityResult;
-        }
-      }
-    }
-
-    const logoDetected =
-      logoDetection?.detected ===
-      true;
-
-    const normalizedOcr =
-      String(
-        contentAnalysis.ocr_text ||
-        ""
-      )
-        .toLowerCase()
-        .replace(
-          /[^a-z0-9]+/g,
-          " "
-        );
-
-    const brandWords =
-      String(
-        upload.brand_name ||
-        ""
-      )
-        .toLowerCase()
-        .match(/[a-z0-9]+/g) ||
-      [];
-
-    const matchedBrandWords =
-      brandWords.filter(
-        (word) =>
-          normalizedOcr.includes(
-            word
-          )
-      );
-
-    const textMatched =
-      brandWords.length > 0 &&
-      matchedBrandWords.length ===
-        brandWords.length;
-
-    const partialTextMatch =
-      brandWords.length > 0 &&
-      matchedBrandWords.length > 0;
-
-    const inlierMatches =
-      Number(
-        logoDetection
-          ?.inlier_matches ||
-        0
-      );
-
-    const visualEvidenceScore =
-      Math.min(
-        100,
-        inlierMatches * 5
-      );
-
-    const textEvidenceScore =
-      brandWords.length > 0
-        ? Number(
-            (
-              (
-                matchedBrandWords.length /
-                brandWords.length
-              ) * 100
-            ).toFixed(2)
-          )
-        : 0;
-
-    const identityScore =
-      Number(
-        (
-          (
-            visualEvidenceScore *
-              0.6 +
-            textEvidenceScore *
-              0.4
-          )
-        ).toFixed(2)
-      );
-
-    const partialLogoMatch =
-      !logoDetected &&
-      partialTextMatch &&
-      (
-        inlierMatches >= 8 ||
-        textEvidenceScore >= 50
-      );
-
-    if (
-      logoDetection &&
-      typeof logoDetection ===
-        "object"
-    ) {
-      logoDetection
-        .identity_evidence = {
-          visual_feature_score:
-            visualEvidenceScore,
-
-          brand_text_score:
-            textEvidenceScore,
-
-          available_evidence_score:
-            identityScore,
-
-          exact_geometry_match:
-            logoDetected,
-
-          matched_brand_words:
-            matchedBrandWords,
-
-          expected_brand_words:
-            brandWords,
-        };
-    }
-
-    const detectionConfidence =
-      extractResultScore(
-        logoDetection
-      ) ??
-      (
-        logoDetected
-          ? 100
-          : identityScore
-      );
-
-    const detectionPassed =
-      logoDetected ||
-      (
-        textMatched &&
-        identityScore >= 60
-      );
-
-    const detectionWarning =
-      !detectionPassed &&
-      partialLogoMatch;
-
-    const detectionCheck =
-      createBrandCheck({
-        name:
-          "logo_detection",
-
-        passed:
-          detectionPassed,
-
-        warning:
-          detectionWarning,
-
-        score:
-          detectionPassed
-            ? Math.max(
-                detectionConfidence ||
-                  0,
-                identityScore
-              )
-            : detectionWarning
-              ? identityScore
-              : detectionConfidence,
-
-        message:
-          detectionPassed
-            ? (
-                logoDetection
-                  ?.message ||
-                "Official brand logo was detected successfully."
-              )
-            : detectionWarning
-              ? "Related brand artwork and brand text were detected, but the complete official logo match was uncertain."
-              : (
-                  logoDetection
-                    ?.message ||
-                  "Official logo was not detected."
-                ),
-
-        data:
-          logoDetection,
-      });
-
-    brandChecks.push(
-      detectionCheck
-    );
-
-    await saveBrandAssetResult({
-      uploadId:
-        upload.id,
-
-      assetType:
-        "logo_detection",
-
-      result:
-        logoDetection,
-
-      detected:
-        detectionPassed ||
-        detectionWarning,
-
-      confidence:
-        detectionCheck.score,
-
-      status:
-        detectionPassed
-          ? "detected"
-          : detectionWarning
-            ? "unclear"
-            : "missing",
+  if (!upload.official_logo_path) {
+    const missingLogoCheck = createBrandCheck({
+      name: "official_logo_reference",
+      passed: false,
+      message:
+        "The selected brand does not have an official logo reference.",
     });
 
-    /*
-     * A bounding box is required for placement
-     * and colour analysis.
-     */
-    if (
-      !logoDetection?.bbox
-    ) {
-      brandIssues.push({
-        issue_type:
-          detectionWarning
-            ? "logo_mismatch"
-            : "logo_missing",
+    brandChecks.push(missingLogoCheck);
 
-        issue_description:
-          detectionWarning
-            ? "Related brand artwork was found, but the complete official logo could not be matched reliably."
-            : "The official brand logo was not detected reliably on the packaging.",
-
-        recommendation:
-          detectionWarning
-            ? "Use the complete approved official logo without removing its border, tagline or visual elements."
-            : "Add the official logo clearly and avoid changing its shape, text or visual elements.",
-
-        severity:
-          detectionWarning
-            ? "medium"
-            : "high",
-      });
-
-      return {
-        brandChecks,
-        brandIssues,
-        logoDetection,
-        logoPlacement:
-          null,
-
-        colourConsistency:
-          null,
-      };
-    }
-
-    const bbox =
-      logoDetection.bbox;
-
-    /*
-     * Placement and colours are both evaluated.
-     */
-    const [
-      placementResponse,
-      colourResponse,
-    ] = await Promise.all([
-      verifyLogoPlacement(
-        upload,
-        bbox,
-        {
-          preferredPositions,
-          threshold: 0.35,
-        }
-      ),
-
-      verifyBrandColourConsistency(
-        upload,
-        bbox,
-        {
-          numberOfColors: 4,
-          threshold: 0.35,
-        }
-      ),
-    ]);
-
-    console.log(
-      "LOGO PLACEMENT RAW RESPONSE:",
-      JSON.stringify(
-        placementResponse
-      )
-    );
-
-    console.log(
-      "BRAND COLOUR RAW RESPONSE:",
-      JSON.stringify(
-        colourResponse
-      )
-    );
-
-    const logoPlacement =
-      extractPlacementResult(
-        placementResponse
-      );
-
-    const colourConsistency =
-      extractColourResult(
-        colourResponse
-      );
-
-    console.log(
-      "NORMALIZED LOGO PLACEMENT:",
-      JSON.stringify(
-        logoPlacement
-      )
-    );
-
-    console.log(
-      "NORMALIZED BRAND COLOURS:",
-      JSON.stringify(
-        colourConsistency
-      )
-    );
-
-    /*
-     * Logo placement check.
-     */
-    const placementScore =
-      extractResultScore(
-        logoPlacement
-      );
-
-    const placementPassed =
-      checkPassed(
-        logoPlacement,
-        {
-          minimumScore: 55,
-        }
-      );
-
-    const placementWarning =
-      !placementPassed &&
-      checkWarning(
-        logoPlacement,
-        {
-          minimumWarningScore:
-            30,
-
-          passingScore:
-            55,
-        }
-      );
-
-    brandChecks.push(
-      createBrandCheck({
-        name:
-          "logo_placement",
-
-        passed:
-          placementPassed,
-
-        warning:
-          placementWarning,
-
-        score:
-          placementScore,
-
-        message:
-          logoPlacement?.message ||
-          (
-            placementPassed
-              ? "Logo placement is acceptable."
-              : placementWarning
-                ? "Logo placement is usable but requires minor correction."
-                : "Logo placement requires correction."
-          ),
-
-        data:
-          logoPlacement,
-      })
-    );
-
-    await saveBrandAssetResult({
-      uploadId:
-        upload.id,
-
-      assetType:
-        "logo_placement",
-
-      result:
-        logoPlacement,
-
-      detected:
-        placementPassed ||
-        placementWarning,
-
-      confidence:
-        placementScore,
-
-      status:
-        placementPassed
-          ? "detected"
-          : placementWarning
-            ? "unclear"
-            : "missing",
+    brandIssues.push({
+      issue_type: "brand_reference_missing",
+      issue_description:
+        "The selected brand does not have an official logo reference.",
+      recommendation:
+        "The SME must upload an official brand logo before packaging verification.",
+      severity: "high",
     });
 
-    if (!placementPassed) {
-      brandIssues.push({
-        issue_type:
-          "incorrect_logo_placement",
+    return {
+      brandChecks,
+      brandIssues,
+      logoDetection: null,
+      logoPlacement: null,
+      colourConsistency: null,
+    };
+  }
 
-        issue_description:
-          logoPlacement?.message ||
-          "The logo is not placed in an approved brand position.",
+  /*
+   * Step 1: Find the official logo inside the packaging.
+   */
+  const detectionResponse = await detectLogoBBox(upload, {
+    threshold: 0.6,
+  });
 
-        recommendation:
-          logoPlacement
-            ?.recommendation ||
-          "Move the logo to one of the preferred positions and maintain safe margins.",
+  let logoDetection =
+    detectionResponse?.data || null;
 
-        severity:
-          placementWarning
-            ? "medium"
-            : "high",
-      });
+  if (!logoDetection?.detected) {
+    const candidate = findBrandCandidate(contentAnalysis, upload.brand_name);
+    if (candidate) {
+      const identityResponse = await verifyLogoIdentity(upload, candidate.bbox, candidate.textScore);
+      if (identityResponse?.data) logoDetection = identityResponse.data;
     }
+  }
 
-    /*
-     * Brand-colour consistency check.
-     */
-    const colourScore =
-      extractResultScore(
-        colourConsistency
-      );
+  const logoDetected =
+    logoDetection?.detected === true;
 
-    const colourPassed =
-      checkPassed(
-        colourConsistency,
-        {
-          minimumScore: 55,
-        }
-      );
+  const normalizedOcr = String(contentAnalysis.ocr_text || "")
+    .toLowerCase().replace(/[^a-z0-9]+/g, " ");
+  const brandWords = String(upload.brand_name || "")
+    .toLowerCase().match(/[a-z0-9]+/g) || [];
+  const textMatched = brandWords.length > 0 && brandWords.every((word) => normalizedOcr.includes(word));
+  const visualEvidenceScore = Math.min(100, Number(logoDetection?.inlier_matches || 0) * 5);
+  const textEvidenceScore = textMatched ? 100 : 0;
+  const identityScore = Number(((visualEvidenceScore * 0.45 + textEvidenceScore * 0.25) / 0.70).toFixed(2));
+  const partialLogoMatch =
+    !logoDetected && textMatched && Number(logoDetection?.inlier_matches || 0) >= 12;
 
-    const colourWarning =
-      !colourPassed &&
-      checkWarning(
-        colourConsistency,
-        {
-          minimumWarningScore:
-            30,
+  if (logoDetection) {
+    logoDetection.identity_evidence = {
+      visual_feature_score: visualEvidenceScore,
+      brand_text_score: textEvidenceScore,
+      available_evidence_score: identityScore,
+      exact_geometry_match: logoDetected,
+    };
+  }
 
-          passingScore:
-            55,
-        }
-      );
+  const detectionConfidence =
+    logoDetection?.confidence || 0;
 
-    brandChecks.push(
-      createBrandCheck({
-        name:
-          "brand_colour_consistency",
+  const detectionCheck = createBrandCheck({
+    name: "logo_detection",
+    passed: logoDetected,
+    warning: partialLogoMatch,
+    score: logoDetected ? detectionConfidence : partialLogoMatch ? identityScore : detectionConfidence,
+    message:
+      (partialLogoMatch
+        ? "A strong partial brand-logo match was found, but the complete official artwork differs."
+        : logoDetection?.message) ||
+      (logoDetected
+        ? "Official logo detected successfully."
+        : "Official logo was not detected."),
+    data: logoDetection,
+  });
 
-        passed:
-          colourPassed,
+  brandChecks.push(detectionCheck);
 
-        warning:
-          colourWarning,
+  await saveBrandAssetResult({
+    uploadId: upload.id,
+    assetType: "logo_detection",
+    result: logoDetection,
+    detected: logoDetected || partialLogoMatch,
+    confidence: logoDetected ? detectionConfidence : partialLogoMatch ? identityScore : detectionConfidence,
+    status: logoDetected ? "detected" : partialLogoMatch ? "warning" : "missing",
+  });
 
-        score:
-          colourScore,
-
-        message:
-          colourConsistency?.message ||
-          (
-            colourPassed
-              ? "Brand colours are consistent."
-              : colourWarning
-                ? "Brand colours are partly consistent and require minor correction."
-                : "Brand colours require correction."
-          ),
-
-        data:
-          colourConsistency,
-      })
-    );
-
-    await saveBrandAssetResult({
-      uploadId:
-        upload.id,
-
-      assetType:
-        "brand_colour_consistency",
-
-      result:
-        colourConsistency,
-
-      detected:
-        colourPassed ||
-        colourWarning,
-
-      confidence:
-        colourScore,
-
-      status:
-        colourPassed
-          ? "detected"
-          : colourWarning
-            ? "unclear"
-            : "missing",
+  if (!logoDetected || !logoDetection?.bbox) {
+    const strongPartialEvidence = partialLogoMatch;
+    brandIssues.push({
+      issue_type: strongPartialEvidence ? "logo_mismatch" : "logo_missing",
+      issue_description: strongPartialEvidence
+        ? "Related brand artwork was found, but the complete official logo could not be matched reliably."
+        : "The official brand logo was not detected reliably on the packaging.",
+      recommendation: strongPartialEvidence
+        ? "Use the complete approved official logo without removing its border, tagline or other visual elements."
+        : "Add the official logo clearly and avoid changing its shape, text or visual elements.",
+      severity: strongPartialEvidence ? "medium" : "high",
     });
-
-    if (!colourPassed) {
-      brandIssues.push({
-        issue_type:
-          "brand_colour_mismatch",
-
-        issue_description:
-          colourConsistency
-            ?.message ||
-          "Packaging logo colours do not sufficiently match the official brand logo.",
-
-        recommendation:
-          colourConsistency
-            ?.recommendation ||
-          "Use the official brand colour values extracted from the registered logo.",
-
-        severity:
-          colourWarning
-            ? "medium"
-            : "high",
-      });
-    }
 
     return {
       brandChecks,
       brandIssues,
       logoDetection,
-      logoPlacement,
-      colourConsistency,
+      logoPlacement: null,
+      colourConsistency: null,
     };
+  }
+
+  const bbox = logoDetection.bbox;
+
+  /*
+   * Step 2 and 3 run after the bounding box is available.
+   */
+  const [
+    placementResponse,
+    colourResponse,
+  ] = await Promise.all([
+    verifyLogoPlacement(upload, bbox, {
+      preferredPositions,
+    }),
+
+    verifyBrandColourConsistency(upload, bbox, {
+      numberOfColors: 4,
+    }),
+  ]);
+
+  const logoPlacement =
+    placementResponse?.data || null;
+
+  const colourConsistency =
+    colourResponse?.data || null;
+
+  /*
+   * Logo placement check.
+   */
+  const placementPassed = checkPassed(
+    logoPlacement
+  );
+
+  const placementWarning = checkWarning(
+    logoPlacement
+  );
+
+  const placementScore =
+    logoPlacement?.score ??
+    logoPlacement?.placement_score ??
+    logoPlacement?.overall_score ??
+    null;
+
+  brandChecks.push(
+    createBrandCheck({
+      name: "logo_placement",
+      passed: placementPassed,
+      warning: placementWarning,
+      score: placementScore,
+      message:
+        logoPlacement?.message ||
+        (placementPassed
+          ? "Logo placement is acceptable."
+          : "Logo placement requires correction."),
+      data: logoPlacement,
+    })
+  );
+
+  await saveBrandAssetResult({
+    uploadId: upload.id,
+    assetType: "logo_placement",
+    result: logoPlacement,
+    detected:
+      placementPassed || placementWarning,
+    confidence: placementScore,
+    status: placementPassed
+      ? "detected"
+      : placementWarning
+        ? "warning"
+        : "failed",
+  });
+
+  if (!placementPassed) {
+    brandIssues.push({
+      issue_type: "incorrect_logo_placement",
+      issue_description:
+        logoPlacement?.message ||
+        "The logo is not placed in an approved brand position.",
+      recommendation:
+        logoPlacement?.recommendation ||
+        "Move the logo to one of the preferred positions and maintain safe margins.",
+      severity: placementWarning
+        ? "medium"
+        : "high",
+    });
+  }
+
+  /*
+   * Brand colour consistency check.
+   */
+  const colourPassed = checkPassed(
+    colourConsistency
+  );
+
+  const colourWarning = checkWarning(
+    colourConsistency
+  );
+
+  const colourScore =
+    colourConsistency?.score ??
+    colourConsistency?.consistency_score ??
+    colourConsistency?.overall_score ??
+    null;
+
+  brandChecks.push(
+    createBrandCheck({
+      name: "brand_colour_consistency",
+      passed: colourPassed,
+      warning: colourWarning,
+      score: colourScore,
+      message:
+        colourConsistency?.message ||
+        (colourPassed
+          ? "Brand colours are consistent."
+          : "Brand colours require correction."),
+      data: colourConsistency,
+    })
+  );
+
+  await saveBrandAssetResult({
+    uploadId: upload.id,
+    assetType: "brand_colour_consistency",
+    result: colourConsistency,
+    detected:
+      colourPassed || colourWarning,
+    confidence: colourScore,
+    status: colourPassed
+      ? "detected"
+      : colourWarning
+        ? "warning"
+        : "failed",
+  });
+
+  if (!colourPassed) {
+    brandIssues.push({
+      issue_type: "brand_colour_mismatch",
+      issue_description:
+        colourConsistency?.message ||
+        "Packaging logo colours do not sufficiently match the official brand logo.",
+      recommendation:
+        colourConsistency?.recommendation ||
+        "Use the official brand colour values extracted from the registered logo.",
+      severity: colourWarning
+        ? "medium"
+        : "high",
+    });
+  }
+
+  return {
+    brandChecks,
+    brandIssues,
+    logoDetection,
+    logoPlacement,
+    colourConsistency,
   };
+};
 
 /**
- * Checks detected content against
- * market regulations.
+ * Checks detected content against market regulations.
  */
-const runRegulationVerification =
-  async (
-    upload,
-    detectedAssets
-  ) => {
-    const detectedMap =
-      convertAssetsToMap(
-        detectedAssets
-      );
+const runRegulationVerification = async (
+  upload,
+  detectedAssets
+) => {
+  const detectedMap =
+    convertAssetsToMap(detectedAssets);
 
-    const regulations =
-      await Regulation
-        .getByMarketAndCategory(
-          upload.market_id,
-          upload.category_id
-        );
+  const regulations =
+    await Regulation.getByMarketAndCategory(
+      upload.market_id,
+      upload.category_id
+    );
 
-    let passedRules = 0;
-    let failedRules = 0;
+  let passedRules = 0;
+  let failedRules = 0;
+  const mandatoryRules = regulations.filter((rule) => Boolean(rule.mandatory));
 
-    const mandatoryRules =
-      regulations.filter(
-        (rule) =>
-          Boolean(
-            rule.mandatory
-          )
-      );
+  const regulationIssues = [];
+  const ruleResults = [];
 
-    const regulationIssues = [];
-    const ruleResults = [];
+  for (const rule of regulations) {
+    const key = normalizeRuleName(
+      rule.rule_name
+    );
 
-    for (
-      const rule of regulations
-    ) {
-      const key =
-        normalizeRuleName(
-          rule.rule_name
-        );
+    const detected = detectedMap[key];
 
-      const detected =
-        detectedMap[key];
+    const passed =
+      Boolean(detected) &&
+      detected.detected === true;
 
-      const passed =
-        Boolean(detected) &&
-        detected.detected ===
-          true;
+    if (passed && rule.mandatory) {
+      passedRules++;
+    } else if (!passed && rule.mandatory) {
+      failedRules++;
 
-      if (
-        passed &&
-        rule.mandatory
-      ) {
-        passedRules += 1;
-      } else if (
-        !passed &&
-        rule.mandatory
-      ) {
-        failedRules += 1;
-
-        regulationIssues.push({
-          regulation_id:
-            rule.id,
-
-          issue_type:
-            "missing",
-
-          issue_description:
-            `${rule.rule_name} is missing or was not detected.`,
-
-          recommendation:
-            rule.recommendation ||
-            `Please add or clearly display ${rule.rule_name} on the packaging.`,
-
-          severity:
-            "high",
-        });
-      }
-
-      ruleResults.push({
-        regulation_id:
-          rule.id,
-
-        rule_name:
-          rule.rule_name,
-
-        asset_key:
-          key,
-
-        mandatory:
-          Boolean(
-            rule.mandatory
-          ),
-
-        passed,
-
-        detected_asset:
-          detected || null,
+      regulationIssues.push({
+        regulation_id: rule.id,
+        issue_type: "missing",
+        issue_description:
+          `${rule.rule_name} is missing or was not detected.`,
+        recommendation:
+          rule.recommendation ||
+          `Please add or clearly display ${rule.rule_name} on the packaging.`,
+        severity: "high",
       });
     }
 
-    return {
-      regulations,
-      ruleResults,
-      regulationIssues,
+    ruleResults.push({
+      regulation_id: rule.id,
+      rule_name: rule.rule_name,
+      asset_key: key,
+      mandatory: Boolean(rule.mandatory),
+      passed,
+      detected_asset: detected || null,
+    });
+  }
 
-      totalRules:
-        mandatoryRules.length,
-
-      passedRules,
-      failedRules,
-    };
+  return {
+    regulations,
+    ruleResults,
+    regulationIssues,
+    totalRules: mandatoryRules.length,
+    passedRules,
+    failedRules,
   };
+};
 
 /**
  * Main packaging verification function.
  */
-exports.runVerification =
-  async (upload) => {
-    /*
-     * Remove previous detected assets.
-     */
-    await Upload.clearDetectedAssets(
-      upload.id
+exports.runVerification = async (upload) => {
+  /*
+   * Remove old detected assets before rerunning verification.
+   */
+  await Upload.clearDetectedAssets(upload.id);
+
+  /*
+   * OCR, barcode and QR.
+   */
+  const {
+    aiResponse,
+    normalizedAssets,
+  } = await runContentAnalysis(upload);
+
+  /*
+   * Official logo, placement and colours.
+   */
+  const brandVerification =
+    await runBrandAssetVerification(upload, aiResponse);
+
+  /*
+   * Fetch all stored detected assets after AI checks.
+   */
+  const detectedAssets =
+    await Upload.getDetectedAssets(upload.id);
+
+  /*
+   * Verify packaging content against regulations.
+   */
+  const regulationVerification =
+    await runRegulationVerification(
+      upload,
+      detectedAssets
     );
 
-    /*
-     * OCR, barcode and QR analysis.
-     */
-    const {
-      aiResponse,
-      normalizedAssets,
-    } =
-      await runContentAnalysis(
-        upload
-      );
+  const {
+    regulations,
+    ruleResults,
+    regulationIssues,
+    totalRules,
+    passedRules,
+    failedRules,
+  } = regulationVerification;
 
-    /*
-     * Official logo, placement and colours.
-     */
-    const brandVerification =
-      await runBrandAssetVerification(
-        upload,
-        aiResponse
-      );
+  /*
+   * Regulation score.
+   */
+  const regulatoryScore =
+    totalRules > 0
+      ? Number(
+          (
+            (passedRules / totalRules) *
+            100
+          ).toFixed(2)
+        )
+      : 0;
 
-    /*
-     * Load stored detected assets.
-     */
-    const detectedAssets =
-      await Upload.getDetectedAssets(
-        upload.id
-      );
+  /*
+   * Brand asset score.
+   *
+   * Passed = 100
+   * Warning = 50
+   * Failed = 0
+   */
+  const brandChecks =
+    brandVerification.brandChecks;
 
-    /*
-     * Regulatory verification.
-     */
-    const regulationVerification =
-      await runRegulationVerification(
-        upload,
-        detectedAssets
-      );
+  const brandPoints =
+    brandChecks.reduce(
+      (total, check) => {
+        if (check.passed) {
+          return total + 100;
+        }
 
-    const {
-      regulations,
-      ruleResults,
-      regulationIssues,
-      totalRules,
-      passedRules,
-      failedRules,
-    } =
-      regulationVerification;
+        if (check.warning) {
+          return total + 50;
+        }
 
-    /*
-     * Regulation score.
-     */
-    const regulatoryScore =
-      totalRules > 0
-        ? Number(
-            (
-              (
-                passedRules /
-                totalRules
-              ) * 100
-            ).toFixed(2)
-          )
-        : 0;
-
-    /*
-     * Brand asset score:
-     *
-     * Passed = 100 points
-     * Warning = 50 points
-     * Failed = 0 points
-     */
-    const brandChecks =
-      brandVerification
-        .brandChecks;
-
-    const brandPoints =
-      brandChecks.reduce(
-        (
-          total,
-          check
-        ) => {
-          if (check.passed) {
-            return total + 100;
-          }
-
-          if (check.warning) {
-            return total + 50;
-          }
-
-          return total;
-        },
-        0
-      );
-
-    const brandScore =
-      brandChecks.length > 0
-        ? Number(
-            (
-              brandPoints /
-              brandChecks.length
-            ).toFixed(2)
-          )
-        : 0;
-
-    /*
-     * Overall score:
-     * - regulations: 70%
-     * - brand assets: 30%
-     */
-    const complianceScore =
-      Number(
-        (
-          regulatoryScore *
-            0.7 +
-          brandScore *
-            0.3
-        ).toFixed(2)
-      );
-
-    const logoWasDetected =
-      brandChecks.some(
-        (check) =>
-          check.name ===
-            "logo_detection" &&
-          check.passed
-      );
-
-    const hasFailedBrandCheck =
-      brandChecks.some(
-        (check) =>
-          !check.passed &&
-          !check.warning
-      );
-
-    let exportStatus =
-      "not_ready";
-
-    if (
-      complianceScore >= 80 &&
-      logoWasDetected &&
-      !hasFailedBrandCheck
-    ) {
-      exportStatus =
-        "ready";
-    } else if (
-      complianceScore >= 50
-    ) {
-      exportStatus =
-        "needs_correction";
-    }
-
-    const summary =
-      `Verification completed. ` +
-      `${passedRules} of ${totalRules} regulatory rules passed. ` +
-      `Regulation score: ${regulatoryScore}%. ` +
-      `Brand asset score: ${brandScore}%. ` +
-      `Overall compliance score: ${complianceScore}%.`;
-
-    /*
-     * Save summary result.
-     */
-    const resultId =
-      await Verification.createResult({
-        upload_id:
-          upload.id,
-
-        total_rules:
-          totalRules,
-
-        passed_rules:
-          passedRules,
-
-        failed_rules:
-          failedRules,
-
-        compliance_score:
-          complianceScore,
-
-        export_status:
-          exportStatus,
-
-        summary,
-      });
-
-    /*
-     * Save regulation issues.
-     */
-    for (
-      const issue of
-      regulationIssues
-    ) {
-      await Verification.createIssue({
-        result_id:
-          resultId,
-
-        ...issue,
-      });
-    }
-
-    /*
-     * Generate AI correction suggestions.
-     */
-    await Suggestion.deleteByResultId(
-      resultId
+        return total;
+      },
+      0
     );
 
-    const issuesForSuggestions = [
-      ...regulationIssues.map(
-        (issue) => ({
-          ...issue,
+  const brandScore =
+    brandChecks.length > 0
+      ? Number(
+          (
+            brandPoints /
+            brandChecks.length
+          ).toFixed(2)
+        )
+      : 0;
 
-          rule_name:
-            regulations.find(
-              (regulation) =>
-                regulation.id ===
-                issue.regulation_id
-            )?.rule_name ||
-            "general",
-        })
-      ),
+  /*
+   * Overall score:
+   * 70% regulations
+   * 30% brand assets
+   */
+  const complianceScore = Number(
+    (
+      regulatoryScore * 0.7 +
+      brandScore * 0.3
+    ).toFixed(2)
+  );
 
-      ...brandVerification
-        .brandIssues
-        .map((issue) => ({
-          ...issue,
+  const logoWasDetected =
+    brandVerification.logoDetection
+      ?.detected === true;
 
-          rule_name:
-            issue.issue_type,
-        })),
-    ];
+  const hasFailedBrandCheck = brandChecks.some(
+    (check) => !check.passed && !check.warning
+  );
 
-    const suggestions =
-      generateSuggestionsFromIssues(
-        issuesForSuggestions
-      );
+  let exportStatus = "not_ready";
 
-    for (
-      const suggestion of
-      suggestions
-    ) {
-      await Suggestion.create({
-        result_id:
-          resultId,
+  if (
+    complianceScore >= 80 &&
+    logoWasDetected &&
+    !hasFailedBrandCheck
+  ) {
+    exportStatus = "ready";
+  } else if (complianceScore >= 50) {
+    exportStatus =
+      "needs_correction";
+  }
 
-        ...suggestion,
-      });
-    }
+  const summary =
+    `Verification completed. ` +
+    `${passedRules} of ${totalRules} regulatory rules passed. ` +
+    `Regulation score: ${regulatoryScore}%. ` +
+    `Brand asset score: ${brandScore}%. ` +
+    `Overall compliance score: ${complianceScore}%.`;
 
-    return {
-      verification_id:
-        resultId,
-
-      result_id:
-        resultId,
-
-      upload_id:
-        upload.id,
-
-      brand: {
-        brand_id:
-          upload.brand_id,
-
-        brand_name:
-          upload.brand_name,
-
-        official_logo_path:
-          upload
-            .official_logo_path,
-      },
-
-      scores: {
-        regulatory_score:
-          regulatoryScore,
-
-        brand_asset_score:
-          brandScore,
-
-        overall_compliance_score:
-          complianceScore,
-      },
-
-      total_rules:
-        totalRules,
-
-      passed_rules:
-        passedRules,
-
-      failed_rules:
-        failedRules,
-
-      compliance_score:
-        complianceScore,
-
-      export_status:
-        exportStatus,
-
+  /*
+   * Save summary result.
+   */
+  const resultId =
+    await Verification.createResult({
+      upload_id: upload.id,
+      total_rules: totalRules,
+      passed_rules: passedRules,
+      failed_rules: failedRules,
+      compliance_score: complianceScore,
+      export_status: exportStatus,
       summary,
+    });
 
-      ai_result: {
-        content_analysis:
-          aiResponse,
+  /*
+   * Current compliance_issues table is linked to regulations.
+   * Therefore only regulation issues are stored there.
+   * Brand issues are returned separately to the frontend.
+   */
+  for (const issue of regulationIssues) {
+    await Verification.createIssue({
+      result_id: resultId,
+      ...issue,
+    });
+  }
 
-        logo_detection:
-          brandVerification
-            .logoDetection,
+  /*
+   * Generate correction suggestions from all issues.
+   */
+  await Suggestion.deleteByResultId(
+    resultId
+  );
 
-        logo_placement:
-          brandVerification
-            .logoPlacement,
+  const issuesForSuggestions = [
+    ...regulationIssues.map(
+      (issue) => ({
+        ...issue,
+        rule_name:
+          regulations.find(
+            (regulation) =>
+              regulation.id ===
+              issue.regulation_id
+          )?.rule_name ||
+          "general",
+      })
+    ),
 
-        brand_colour_consistency:
-          brandVerification
-            .colourConsistency,
-      },
+    ...brandVerification.brandIssues.map(
+      (issue) => ({
+        ...issue,
+        rule_name: issue.issue_type,
+      })
+    ),
+  ];
 
-      normalized_assets:
-        normalizedAssets,
+  const suggestions =
+    generateSuggestionsFromIssues(
+      issuesForSuggestions
+    );
 
-      detected_assets:
-        detectedAssets,
+  for (const suggestion of suggestions) {
+    await Suggestion.create({
+      result_id: resultId,
+      ...suggestion,
+    });
+  }
 
-      brand_checks:
-        brandChecks,
+  return {
+    verification_id: resultId,
+    result_id: resultId,
+    upload_id: upload.id,
 
-      rule_results:
-        ruleResults,
+    brand: {
+      brand_id: upload.brand_id,
+      brand_name: upload.brand_name,
+      official_logo_path:
+        upload.official_logo_path,
+    },
 
-      issues: {
-        regulation_issues:
-          regulationIssues,
+    scores: {
+      regulatory_score:
+        regulatoryScore,
+      brand_asset_score: brandScore,
+      overall_compliance_score:
+        complianceScore,
+    },
 
-        brand_asset_issues:
-          brandVerification
-            .brandIssues,
+    total_rules: totalRules,
+    passed_rules: passedRules,
+    failed_rules: failedRules,
 
-        all: [
-          ...regulationIssues,
-          ...brandVerification
-            .brandIssues,
-        ],
-      },
+    compliance_score:
+      complianceScore,
 
-      suggestions,
-    };
+    export_status:
+      exportStatus,
+
+    summary,
+
+    ai_result: {
+      content_analysis: aiResponse,
+      logo_detection:
+        brandVerification.logoDetection,
+      logo_placement:
+        brandVerification.logoPlacement,
+      brand_colour_consistency:
+        brandVerification.colourConsistency,
+    },
+
+    normalized_assets:
+      normalizedAssets,
+
+    detected_assets:
+      detectedAssets,
+
+    brand_checks:
+      brandChecks,
+
+    rule_results:
+      ruleResults,
+
+    issues: {
+      regulation_issues:
+        regulationIssues,
+      brand_asset_issues:
+        brandVerification.brandIssues,
+      all: [
+        ...regulationIssues,
+        ...brandVerification.brandIssues,
+      ],
+    },
+
+    suggestions,
   };
+};
