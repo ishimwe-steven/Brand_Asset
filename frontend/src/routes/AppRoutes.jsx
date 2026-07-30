@@ -63,6 +63,7 @@ import Regulations from "../pages/admin/Regulations";
 import ReferencePackaging from "../pages/admin/ReferencePackaging";
 import UserManagement from "../pages/admin/UserManagement";
 import SystemReports from "../pages/admin/SystemReports";
+import VerificationOversight from "../pages/admin/VerificationOversight";
 
 // ========================================
 // ROUTE PROTECTION
@@ -263,11 +264,7 @@ const AppRoutes = () => {
           <Route
             path="verifications"
             element={
-              <AdminPlaceholderPage
-                title="Verification Oversight"
-                description="Monitor packaging verification activities and compliance results."
-              />
-            }
+              <VerificationOversight />}
           />
 
           {/* System reports */}
