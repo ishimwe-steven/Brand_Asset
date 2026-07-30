@@ -340,9 +340,20 @@ def detect_logo_bbox(
         }
 
     # Multiple occurrences of the same logo create valid matches for
-    # different locations. RANSAC selects one occurrence, so use strong
-    # absolute inlier evidence even when the global ratio is lower.
-    if inlier_ratio < 0.35 and inlier_count < (minimum_inliers * 2):
+    # different locations. RANSAC selects one occurrence, so the global
+    # inlier ratio can be low even when one occurrence has a strong,
+    # coherent match. Requiring twice the normal inlier minimum rejected
+    # valid packaging with repeated brand marks (for example, 17 reliable
+    # inliers against a minimum of 9). A 1.5x threshold still requires
+    # substantially more evidence than the normal detector minimum.
+    strong_partial_inliers = int(
+        np.ceil(minimum_inliers * 1.5)
+    )
+
+    if (
+        inlier_ratio < 0.35
+        and inlier_count < strong_partial_inliers
+    ):
         return {
             "success": True,
             "detected": False,
@@ -383,7 +394,10 @@ def detect_logo_bbox(
     if not polygon_valid:
         mask = inlier_mask.ravel().astype(bool)
         inlier_destinations = destination_points.reshape(-1, 2)[mask]
-        if len(inlier_destinations) >= minimum_inliers * 2:
+        if (
+            len(inlier_destinations)
+            >= strong_partial_inliers
+        ):
             x, y, width, height = cv2.boundingRect(
                 inlier_destinations.reshape(-1, 1, 2).astype(np.float32)
             )
@@ -475,9 +489,12 @@ def detect_logo_bbox(
 
     confidence = round(float(confidence), 2)
 
+    # Honour the caller's configured threshold. The function default is
+    # already 60%, while verification may intentionally use a lower
+    # threshold and combine detection with OCR/identity evidence.
     required_confidence = max(
-        60.0,
-        float(threshold) * 100,
+        0.0,
+        min(100.0, float(threshold) * 100),
     )
 
     if confidence < required_confidence:
