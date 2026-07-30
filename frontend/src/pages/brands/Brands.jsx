@@ -17,7 +17,7 @@ const initialForm = {
 
 const API_BASE_URL =
   import.meta.env.VITE_API_URL?.replace("/api", "") ||
-  "http://localhost:5000";
+  "https://brand-asset.onrender.com";
 
 function getResponseData(response) {
   if (Array.isArray(response)) {

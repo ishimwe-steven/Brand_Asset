@@ -112,7 +112,7 @@ const UploadDetails = () => {
           {upload.file_type?.includes("image") ? (
             <img
               className="details-image"
-              src={`http://localhost:5000${upload.file_path}`}
+              src={`https://brand-asset.onrender.com${upload.file_path}`}
               alt={upload.product_name}
             />
           ) : (

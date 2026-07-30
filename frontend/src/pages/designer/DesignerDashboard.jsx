@@ -8,7 +8,7 @@ import "./DesignerDashboard.css";
 
 const API_BASE_URL =
   import.meta.env.VITE_API_URL?.replace(/\/api\/?$/, "") ||
-  "http://localhost:5000";
+  "https://brand-asset.onrender.com";
 
 const getLogoUrl = (logoPath) => {
   if (!logoPath) return "";

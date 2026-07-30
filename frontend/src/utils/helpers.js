@@ -3,7 +3,7 @@
 // ==========================================
 
 export const BACKEND_URL =
-  import.meta.env.VITE_BACKEND_URL || "http://localhost:5000";
+  import.meta.env.VITE_BACKEND_URL || "https://brand-asset.onrender.com";
 
 
 // ==========================================
@@ -11,7 +11,7 @@ export const BACKEND_URL =
 // Example:
 // /uploads/image.png
 // ->
-// http://localhost:5000/uploads/image.png
+// https://brand-asset.onrender.com/uploads/image.png
 // ==========================================
 
 export const backendFileUrl = (filePath) => {
