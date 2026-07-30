@@ -1,0 +1,128 @@
+.admin-dashboard-page {
+  min-height: 100%;
+}
+
+.admin-dashboard-header {
+  margin-bottom: 30px;
+}
+
+.admin-dashboard-header h1 {
+  margin: 0 0 8px;
+  color: #10233f;
+  font-size: 34px;
+  font-weight: 800;
+}
+
+.admin-dashboard-header p {
+  margin: 0;
+  color: #64748b;
+  font-size: 16px;
+  line-height: 1.6;
+}
+
+.admin-dashboard-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(210px, 1fr));
+  gap: 22px;
+}
+
+.admin-stat-card {
+  background: #ffffff;
+  border: 1px solid #e4eaf3;
+  border-left: 5px solid #2563eb;
+  border-radius: 16px;
+  padding: 24px;
+  box-shadow: 0 10px 28px rgba(22, 48, 92, 0.08);
+  transition:
+    transform 0.2s ease,
+    box-shadow 0.2s ease;
+}
+
+.admin-stat-card:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 14px 34px rgba(22, 48, 92, 0.13);
+}
+
+.admin-stat-card h3 {
+  margin: 0 0 12px;
+  color: #0f3d91;
+  font-size: 38px;
+  font-weight: 800;
+}
+
+.admin-stat-card h4 {
+  margin: 0 0 8px;
+  color: #1e293b;
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.admin-stat-card p {
+  margin: 0;
+  color: #64748b;
+  line-height: 1.5;
+}
+
+.admin-dashboard-section {
+  margin-top: 30px;
+  padding: 28px;
+  background: #ffffff;
+  border: 1px solid #e4eaf3;
+  border-radius: 16px;
+  box-shadow: 0 10px 28px rgba(22, 48, 92, 0.08);
+}
+
+.admin-dashboard-section h2 {
+  margin: 0 0 20px;
+  color: #10233f;
+  font-size: 24px;
+}
+
+.admin-responsibility-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(240px, 1fr));
+  gap: 18px;
+}
+
+.admin-responsibility-card {
+  padding: 20px;
+  background: #f7faff;
+  border: 1px solid #dce7f8;
+  border-radius: 12px;
+}
+
+.admin-responsibility-card h3 {
+  margin: 0 0 8px;
+  color: #0f3d91;
+  font-size: 18px;
+}
+
+.admin-responsibility-card p {
+  margin: 0;
+  color: #64748b;
+  line-height: 1.6;
+}
+
+.admin-dashboard-loading {
+  padding: 40px;
+  color: #0f3d91;
+  font-size: 18px;
+  font-weight: 600;
+}
+
+@media (max-width: 1200px) {
+  .admin-dashboard-grid {
+    grid-template-columns: repeat(2, minmax(220px, 1fr));
+  }
+}
+
+@media (max-width: 700px) {
+  .admin-dashboard-grid,
+  .admin-responsibility-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .admin-dashboard-header h1 {
+    font-size: 28px;
+  }
+}
