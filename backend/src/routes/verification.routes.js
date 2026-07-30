@@ -9,23 +9,25 @@ const {
   getHistory,
 } = require("../controllers/verification.controller");
 
-router.post("/start", authMiddleware, startVerification);
-router.get("/history", authMiddleware, getHistory);
-router.get("/:id", authMiddleware, getVerification);
+// Start packaging verification
+router.post(
+  "/start",
+  authMiddleware,
+  startVerification
+);
 
-module.exports = router;const express = require("express");
-const router = express.Router();
+// Verification history
+router.get(
+  "/history",
+  authMiddleware,
+  getHistory
+);
 
-const authMiddleware = require("../middleware/auth.middleware");
-
-const {
-  startVerification,
-  getVerification,
-  getHistory,
-} = require("../controllers/verification.controller");
-
-router.post("/start", authMiddleware, startVerification);
-router.get("/history", authMiddleware, getHistory);
-router.get("/:id", authMiddleware, getVerification);
+// Get one verification by ID
+router.get(
+  "/:id",
+  authMiddleware,
+  getVerification
+);
 
 module.exports = router;
