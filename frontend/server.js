@@ -1,12 +1,19 @@
-const express = require("express");
-const path = require("path");
-const fs = require("fs");
+import express from "express";
+import path from "path";
+import fs from "fs";
+import { fileURLToPath } from "url";
 
 const app = express();
 
 const PORT = Number(process.env.PORT || 3000);
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
 const distPath = path.join(__dirname, "dist");
 const indexPath = path.join(distPath, "index.html");
+
+app.disable("x-powered-by");
 
 if (!fs.existsSync(indexPath)) {
   console.error(
@@ -14,9 +21,6 @@ if (!fs.existsSync(indexPath)) {
   );
 }
 
-app.disable("x-powered-by");
-
-// Serve Vite production files.
 app.use(
   express.static(distPath, {
     index: false,
@@ -24,7 +28,7 @@ app.use(
   })
 );
 
-// React Router fallback.
+// React Router fallback
 app.use((req, res) => {
   if (!fs.existsSync(indexPath)) {
     return res.status(503).send(
@@ -40,5 +44,3 @@ app.listen(PORT, "0.0.0.0", () => {
     `Mupenzi Packaging Verifier frontend running on port ${PORT}`
   );
 });
-
-module.exports = app;
